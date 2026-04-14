@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gravity Doodle</title>
+  <meta property="og:title" content="Gravity Doodle">
+  <meta property="og:description" content="Draw any shape, then drop hundreds of sand particles and watch them pile into your sculpture.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>gravity doodle</h1>
+      <p id="tagline">draw. then let go.</p>
+    </header>
+
+    <div id="canvas-wrap">
+      <canvas id="main-canvas"></canvas>
+      <div id="overlay-msg" class="hidden"></div>
+    </div>
+
+    <div id="controls">
+      <div id="tool-row">
+        <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')">draw</button>
+        <button id="btn-erase" class="tool-btn" onclick="setMode('erase')">erase</button>
+        <button id="btn-clear" class="tool-btn" onclick="clearAll()">clear</button>
+      </div>
+      <div id="action-row">
+        <button id="btn-drop" onclick="startDrop()">drop</button>
+      </div>
+    </div>
+
+    <div id="share" style="display:none">
+      <p id="settle-msg">your shape lives in sand now</p>
+      <button onclick="saveSculpture()">save my sculpture</button>
+    </div>
+  </div>
+</body>
+</html>
