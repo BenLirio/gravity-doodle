@@ -48,7 +48,7 @@
     canvas.addEventListener('pointerup',   onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
 
-    showOverlay('draw. then let go.');
+    showOverlay('draw any shape here\nwith your finger or mouse\n\nthen tap DROP');
     render();
   });
 
@@ -83,8 +83,16 @@
   // ── Mode ───────────────────────────────────────────────────────────────────
   window.setMode = function (m) {
     mode = m;
-    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('btn-' + m).classList.add('active');
+    document.querySelectorAll('.tool-btn').forEach(b => {
+      b.classList.remove('active');
+      if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', 'false');
+    });
+    // 'pen' button id is btn-draw (mode is 'draw'); erase maps directly.
+    const activeBtn = document.getElementById('btn-' + m);
+    if (activeBtn) {
+      activeBtn.classList.add('active');
+      if (activeBtn.hasAttribute('aria-pressed')) activeBtn.setAttribute('aria-pressed', 'true');
+    }
   };
 
   window.clearAll = function () {
@@ -94,9 +102,11 @@
     hasDrawn = false;
     if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
     document.getElementById('share').style.display = 'none';
-    document.getElementById('btn-drop').disabled = false;
+    const dropBtn = document.getElementById('btn-drop');
+    dropBtn.disabled = false;
+    dropBtn.textContent = 'drop the sand';
     initGrid();
-    showOverlay('draw. then let go.');
+    showOverlay('draw any shape here\nwith your finger or mouse\n\nthen tap DROP');
     render();
   };
 
@@ -178,11 +188,16 @@
       showOverlay('draw something first —\neven a squiggle counts');
       return;
     }
-    if (dropping) return;
+    if (dropping) {
+      // Already pouring: let the user trigger a refill so they can keep going.
+      refillSand();
+      return;
+    }
 
     dropping = true;
     dropFrame = 0;
-    document.getElementById('btn-drop').disabled = true;
+    document.getElementById('btn-drop').disabled = false;
+    document.getElementById('btn-drop').textContent = 'pour more';
 
     // Show loading micro-copy briefly
     showOverlay('watching gravity\ndo its thing...');
@@ -190,24 +205,51 @@
 
     loop();
 
-    // Show share panel after a few seconds (sand settling)
+    // Show share panel after the sand has had time to settle.
+    if (settleTimer) clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       document.getElementById('share').style.display = 'flex';
-    }, 4000);
+    }, 6500);
   };
 
+  // Reset the spawn clock so another wave of sand pours from the top.
+  function refillSand() {
+    dropFrame = 0;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      document.getElementById('share').style.display = 'flex';
+    }, 6500);
+  }
+
   // ── Sand Simulation ────────────────────────────────────────────────────────
-  const SPAWN_RATE = 8;  // new sand particles per frame
+  // More particles, spawned from a wider band along the top, for a richer "pour".
+  const SPAWN_RATE = 18;       // new sand particles per frame
+  const SPAWN_FRAMES = 300;    // ~5 s at 60 fps
+  // Color "streaks": the current palette shifts slowly so the pile has bands
+  // of colour instead of uniform static — keeps it visually interesting.
+  let paletteOffset = 0;
 
   function spawnSand() {
-    // Only spawn for first 180 frames (~3 s at 60 fps)
-    if (dropFrame > 180) return;
+    if (dropFrame > SPAWN_FRAMES) return;
+    // Every ~30 frames, rotate the palette so the streaks shift warm→red→gold.
+    if (dropFrame % 30 === 0) {
+      paletteOffset = (paletteOffset + 1) % SAND_COLORS.length;
+    }
     for (let s = 0; s < SPAWN_RATE; s++) {
       const c = Math.floor(Math.random() * COLS);
-      const i = idx(c, 0);
+      // Spawn across the top 2 rows for a fuller curtain.
+      const r = Math.random() < 0.5 ? 0 : 1;
+      const i = idx(c, r);
       if (grid[i] === EMPTY) {
-        grid[i]   = SAND;
-        colors[i] = SAND_COLORS[Math.floor(Math.random() * SAND_COLORS.length)];
+        grid[i] = SAND;
+        // 70% draw from a shifted 3-color window (streaks), 30% any color
+        // (sparkles), so the pour stays varied but cohesive.
+        if (Math.random() < 0.7) {
+          const k = (paletteOffset + Math.floor(Math.random() * 3)) % SAND_COLORS.length;
+          colors[i] = SAND_COLORS[k];
+        } else {
+          colors[i] = SAND_COLORS[Math.floor(Math.random() * SAND_COLORS.length)];
+        }
       }
     }
   }

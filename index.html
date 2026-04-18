@@ -19,23 +19,24 @@
   <div id="app">
     <header>
       <h1>gravity doodle</h1>
-      <p id="tagline">draw. then let go.</p>
+      <p id="tagline">draw a shape — then hit drop</p>
     </header>
+
+    <div id="controls">
+      <div id="action-row">
+        <button id="btn-drop" onclick="startDrop()">drop the sand</button>
+      </div>
+      <div id="tool-row" role="group" aria-label="drawing tool">
+        <span id="tool-label">tool:</span>
+        <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
+        <button id="btn-erase" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
+        <button id="btn-clear" class="tool-btn clear-btn" onclick="clearAll()">clear</button>
+      </div>
+    </div>
 
     <div id="canvas-wrap">
       <canvas id="main-canvas"></canvas>
       <div id="overlay-msg" class="hidden"></div>
-    </div>
-
-    <div id="controls">
-      <div id="tool-row">
-        <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')">draw</button>
-        <button id="btn-erase" class="tool-btn" onclick="setMode('erase')">erase</button>
-        <button id="btn-clear" class="tool-btn" onclick="clearAll()">clear</button>
-      </div>
-      <div id="action-row">
-        <button id="btn-drop" onclick="startDrop()">drop</button>
-      </div>
     </div>
 
     <div id="share" style="display:none">
