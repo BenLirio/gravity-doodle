@@ -131,6 +131,29 @@
     canvas.addEventListener('pointercancel', onPointerUp);
     canvas.addEventListener('pointerleave', onPointerUp);
 
+    // Mobile: suppress the "tap-and-hold selects the whole screen" behaviour
+    // and double-tap/pinch-zoom on the canvas. iOS Safari ignores the
+    // viewport `maximum-scale` in some contexts, so we also block gesture
+    // events and touchmove at the element level.
+    const swallowTouch = (e) => { if (e.cancelable) e.preventDefault(); };
+    canvas.addEventListener('touchstart',  swallowTouch, { passive: false });
+    canvas.addEventListener('touchmove',   swallowTouch, { passive: false });
+    canvas.addEventListener('touchend',    swallowTouch, { passive: false });
+    canvas.addEventListener('gesturestart',  (e) => e.preventDefault());
+    canvas.addEventListener('gesturechange', (e) => e.preventDefault());
+    canvas.addEventListener('gestureend',    (e) => e.preventDefault());
+    canvas.addEventListener('contextmenu',   (e) => e.preventDefault());
+    // Block the page-level double-tap-to-zoom that sometimes fires even when
+    // the canvas swallows the touch.
+    let lastTap = 0;
+    document.addEventListener('touchend', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 350) {
+        if (e.cancelable) e.preventDefault();
+      }
+      lastTap = now;
+    }, { passive: false });
+
     animId = requestAnimationFrame(loop);
 
     showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
@@ -765,7 +788,7 @@
 
     try {
       const spec = await generateElement(nameRaw, descRaw);
-      const finalized = finalizeSpec(nameRaw, key, spec);
+      const finalized = finalizeSpec(nameRaw, key, spec, descRaw);
       registerElement(finalized);
       rebuildPalette();
       setMaterial(finalized.key);
@@ -799,49 +822,67 @@
     const otherList = existing.join(', ');
 
     const SYSTEM_PROMPT = [
-      'You design elements for a falling-sand physics sandbox.',
-      'Given an element name (and optional description), output ONE strict JSON object describing how it behaves.',
-      'Be CREATIVE and SPECIFIC: density, viscosity, stickiness, flow, colors, and reactions should reflect the user\'s description, not generic defaults.',
+      'You design elements for a falling-sand physics sandbox. The user INVENTS an element by naming it; your job is to make that element BEHAVE THE WAY THE NAME IMPLIES when the user paints it into the grid.',
+      '',
+      'CORE RULE: the element must feel obvious to a human who hears the name. If a user types "fire" and it doesn\'t rise, glow, or consume plants, the app is broken. Always match common intuition before trying to be clever.',
+      '',
+      'Output ONE strict JSON object. No prose, no code fence.',
       '',
       'Schema (all fields required unless marked optional):',
       '{',
       '  "kind": "static" | "powder" | "liquid" | "gas",',
-      '  "density": number 1-9 (heavier sinks below lighter of same kind, and powders sink through lighter liquids),',
-      '  "viscosity": number 0-1 (LIQUID ONLY: 0=water, 0.4=oil, 0.7=syrup, 0.95=tar/honey. Higher = thicker, slower, less spread),',
-      '  "flow": number 0-1 (POWDER ONLY: 1=flour/dust spreads flat, 0.5=sand piles, 0.1=gravel stacks steeply),',
-      '  "stickiness": number 0-1 (LIQUID/POWDER: 0=normal, 0.5=sticky/wet, 0.9=glue. Sticky things cling to walls and resist falling),',
-      '  "buoyancy": number 0-1 (GAS ONLY: 1=hot fast-rising fire, 0.5=lazy smoke, 0.2=heavy fog),',
-      '  "lifeMin": integer 0-150 (GAS ONLY: 0=no decay, 60=medium puff, 120=long-lived),',
-      '  "lifeMax": integer 0-200 (GAS ONLY: >= lifeMin),',
-      '  "colors": array of 3-6 hex strings like "#aabbcc", vivid and coherent, readable on near-black,',
-      '  "reactions": array of 0-3 objects, each { "other": "<existing-element-key>", "becomes": "<existing-element-key-or-empty>", "chance": number 0.005-0.25 }',
+      '  "density": number 1-9,',
+      '  "viscosity": number 0-1 (LIQUID ONLY),',
+      '  "flow": number 0-1 (POWDER ONLY),',
+      '  "stickiness": number 0-1 (LIQUID/POWDER only),',
+      '  "buoyancy": number 0-1 (GAS ONLY),',
+      '  "lifeMin": integer 0-150 (GAS ONLY),',
+      '  "lifeMax": integer 0-200 (GAS ONLY, >= lifeMin),',
+      '  "colors": array of 3-6 hex strings like "#aabbcc", vivid, coherent, readable on near-black,',
+      '  "reactions": array of 0-3 objects, each { "other": "<existing-key>", "becomes": "<existing-key-or-empty>", "chance": number 0.005-0.25 }',
       '}',
       '',
-      'Kind heuristics (use the description, not just the name):',
-      '- "static": never moves. wall, plant, ice, metal, crystal, wood, brick, glass, bone, web.',
-      '- "powder": falls, piles. sand, salt, dust, glitter, ash, gravel, sugar, snow, seed, gunpowder.',
-      '- "liquid": falls + spreads. water, oil, honey, acid, slime, juice, milk, blood, lava, mercury, syrup, tar, soda.',
-      '- "gas": rises. fire, smoke, steam, fog, mist, vapor, cloud, spores, plasma.',
+      'KIND — pick by what the name evokes, not just letters:',
+      '- static: solid, never moves. wall, brick, stone, metal, wood, ice, plant, glass, bone, web, crystal, bedrock, concrete, iron, steel.',
+      '- powder: granular, falls and piles. sand, salt, sugar, flour, dust, ash, glitter, snow, seed, gunpowder, gravel, pebbles, rice, confetti.',
+      '- liquid: falls and spreads sideways. water, oil, honey, acid, slime, blood, milk, juice, lava, mercury, syrup, tar, wine, soda, gasoline, ink, paint.',
+      '- gas: RISES. fire, flame, smoke, steam, vapor, fog, mist, cloud, spore, plasma, lightning-bug swarm. If in doubt about something hot, bright, or airborne, it\'s a gas.',
       '',
-      'Viscosity rules of thumb (LIQUID): water=0, gasoline=0.05, oil=0.3, blood=0.5, syrup=0.75, honey=0.9, tar=0.97. A "viscous" or "thick" or "slow" liquid MUST have viscosity >= 0.6. Do not return 0 viscosity for honey.',
-      'Flow rules of thumb (POWDER): flour/talc/dust=1.0, fine sand=0.7, sand=0.55, salt=0.5, gravel=0.25, chunky/jagged=0.1.',
-      'Stickiness: slime/glue/tar/web/resin = 0.7-0.95. Anything described as "sticky", "clinging", "gummy" gets >= 0.5.',
-      'Density: feathers=1, smoke=2, oil=3, alcohol=4, water=5, blood=6, mercury=8, lead=9. Match physical intuition.',
+      'NUMERIC GUIDES (follow unless the description overrides):',
+      '- density: feather=1, smoke=2, oil=3, alcohol=4, water=5, blood=6, mercury=8, lead=9.',
+      '- viscosity (liquid): water=0, gasoline=0.05, oil=0.3, blood=0.5, syrup=0.75, honey=0.9, tar=0.97. If the desc says "thick", "viscous", "slow", "oozing", "sluggish", use >= 0.6. NEVER 0 for honey/syrup/tar/oil.',
+      '- flow (powder): flour/talc/dust=1.0, fine sand=0.7, sand=0.55, salt=0.5, gravel=0.25, chunky/jagged/rocks=0.1.',
+      '- stickiness: glue/tar/slime/web/resin = 0.7-0.95. "sticky/clingy/gummy" >= 0.5. default 0.',
+      '- buoyancy (gas): hot/fire/plasma = 1.0, steam = 0.8, smoke = 0.6, heavy fog = 0.25.',
+      '- lifeMin/lifeMax (gas): short puff 20-40, medium 60-100, long-lived 120-180. Fire usually 40-80; smoke 60-120; steam 30-60.',
       '',
-      'Reactions:',
-      '  "other" must be one of the EXISTING element keys: ' + otherList + '. (You may also reference yourself by your own key in `becomes` — the system passes your name through validly.)',
-      '  "becomes" is also an existing key OR the literal string "empty" to destroy the other cell.',
-      '  Reads as: "when this element is next to <other>, with <chance> per frame, <other> turns into <becomes>".',
-      '  Examples:',
-      '    lava → [{"other":"plant","becomes":"fire","chance":0.15},{"other":"water","becomes":"empty","chance":0.1}]',
-      '    acid → [{"other":"plant","becomes":"empty","chance":0.12},{"other":"wall","becomes":"empty","chance":0.04}]',
-      '    snow → [{"other":"fire","becomes":"empty","chance":0.2}]  (snow extinguishes fire)',
-      '  Pick reactions that match the user\'s described behaviour. If the user says "dissolves walls", add {other:"wall",becomes:"empty",chance:0.05}.',
-      '  0-2 reactions is usually enough. Keep chances small (0.01-0.2) so the sandbox stays legible.',
+      'REACTIONS — this is what makes the sandbox feel ALIVE. Always think: "what does this element DO to things it touches?"',
+      '  "other" must be one of the EXISTING keys: ' + otherList + '. (You may also reference yourself in "becomes".)',
+      '  "becomes" is an existing key OR the literal string "empty" to destroy the other cell.',
+      '  Meaning: "when this element is next to <other>, with <chance> per frame, <other> turns into <becomes>".',
+      '  Worked examples — COPY THESE PATTERNS when names match:',
+      '    fire → kind:gas, buoyancy:1, density:1, lifeMin:30, lifeMax:70, colors:["#ff4020","#ff8010","#ffc040","#ffe070"], reactions:[{other:"water",becomes:"empty",chance:0.25},{other:"plant",becomes:"fire",chance:0.12},{other:"oil",becomes:"fire",chance:0.15}]',
+      '    lava → kind:liquid, density:8, viscosity:0.8, colors:["#ff5020","#ff8030","#d03010","#ffc040"], reactions:[{other:"water",becomes:"empty",chance:0.2},{other:"plant",becomes:"fire",chance:0.15},{other:"wall",becomes:"empty",chance:0.01}]',
+      '    acid → kind:liquid, density:4, viscosity:0.1, colors:["#60ff30","#80ff40","#30d020","#b0ff60"], reactions:[{other:"wall",becomes:"empty",chance:0.04},{other:"sand",becomes:"empty",chance:0.06},{other:"plant",becomes:"empty",chance:0.15}]',
+      '    snow → kind:powder, flow:0.4, density:2, colors:["#ffffff","#e8f0ff","#d0e0f0","#fafcff"], reactions:[{other:"fire",becomes:"empty",chance:0.25}]',
+      '    honey → kind:liquid, density:6, viscosity:0.9, stickiness:0.7, colors:["#e8a030","#d48020","#ffc050","#b86020"]',
+      '    smoke → kind:gas, buoyancy:0.6, density:2, lifeMin:60, lifeMax:120, colors:["#606060","#808080","#4a4a4a","#a0a0a0"]',
+      '    plant → kind:static, density:3, colors:["#409040","#60a050","#308030","#80b060"]',
+      '    ice → kind:static, density:5, colors:["#c0e0ff","#a0d0f0","#e0f0ff","#80b0e0"]',
+      '    oil → kind:liquid, density:3, viscosity:0.3, colors:["#2a1010","#4a2810","#1a0808","#603020"], reactions:[{other:"fire",becomes:"fire",chance:0.2}]',
+      '    gunpowder → kind:powder, flow:0.6, density:4, colors:["#2a2a2a","#404040","#1a1a1a"], reactions:[{other:"fire",becomes:"fire",chance:0.5}]',
       '',
-      'Colors: 3-6 hex values from a coherent palette that READS on a near-black background. Honey = warm gold, tar = near-black with brown flecks, acid = vivid green, snow = warm whites and pale blues, fire = orange/yellow/red.',
+      'RULES OF THUMB:',
+      '- If the name contains "fire/flame/inferno/ember/plasma/spark/lightning" → kind MUST be gas, buoyancy >= 0.9, and add a reaction that burns plant/oil/wood.',
+      '- If the name contains "smoke/steam/vapor/mist/fog/cloud" → kind MUST be gas.',
+      '- If the name contains "wall/brick/stone/wood/metal/crystal/glass/ice/plant" → kind MUST be static unless the user says otherwise.',
+      '- If the name contains "water/oil/lava/acid/slime/blood/juice/honey/syrup/tar/milk/soda/ink/wine" → kind MUST be liquid.',
+      '- If the name contains "sand/salt/sugar/dust/ash/flour/glitter/snow/seed/gravel" → kind MUST be powder.',
+      '- If the element sounds REACTIVE (burns, melts, freezes, dissolves, rusts, poisons, cures, grows, explodes, etches, corrodes), ADD AT LEAST ONE reaction. Elements with no reactions feel inert.',
       '',
-      'Respond with ONLY the JSON object. No prose, no code fence.',
+      'COLORS: 3-6 hex values from a coherent palette that READS on near-black (#0f0e0c). Honey=warm gold, tar=near-black with brown flecks, acid=vivid neon green, snow=warm whites + pale blues, fire=orange/yellow/red, smoke=grays, lava=deep red/orange/yellow, plant=greens, ice=pale blues/cyans. Avoid pure #000000 or very dark colors for powders/liquids — they disappear.',
+      '',
+      'Before you respond, sanity-check: does this behaviour match what a human would expect when they see the name? If not, fix it. Respond with ONLY the JSON object.',
     ].join('\n');
 
     const userPrompt = desc
@@ -877,11 +918,46 @@
     return parsed;
   }
 
+  // Name-based overrides: if the user typed something with an obvious real-
+  // world kind, the LLM occasionally miscategorises it. These rules are a
+  // final safety net so "fire" always rises and "wall" never falls, no
+  // matter what the model said. Only fires for unambiguous names.
+  function kindOverrideFromName(key, desc) {
+    const blob = (key + ' ' + (desc || '')).toLowerCase();
+    const any = (...words) => words.some(w => blob.indexOf(w) >= 0);
+    // Gas — hot/bright/airborne things MUST rise.
+    if (any('fire', 'flame', 'inferno', 'ember', 'plasma', 'lightning')) return 'gas';
+    if (any('smoke', 'steam', 'vapor', 'mist', 'fog', 'cloud')) return 'gas';
+    // Static — solid things don't move.
+    if (any('wall', 'brick', 'concrete', 'bedrock')) return 'static';
+    if (any('wood', 'timber', 'log', 'bark')) return 'static';
+    if (any('metal', 'iron', 'steel', 'copper', 'brass')) return 'static';
+    if (any('ice', 'icicle', 'glacier')) return 'static';
+    if (any('plant', 'leaf', 'vine', 'tree', 'grass', 'moss')) return 'static';
+    if (any('glass', 'crystal', 'gem', 'diamond')) return 'static';
+    // Liquid — obvious fluids.
+    if (any('lava', 'magma')) return 'liquid';
+    if (any('water', 'ocean', 'river')) return 'liquid';
+    if (any('oil', 'gasoline', 'petrol')) return 'liquid';
+    if (any('acid', 'poison')) return 'liquid';
+    if (any('honey', 'syrup', 'molasses', 'caramel', 'tar')) return 'liquid';
+    if (any('blood', 'slime', 'goo', 'ooze')) return 'liquid';
+    if (any('juice', 'milk', 'wine', 'soda', 'ink', 'paint')) return 'liquid';
+    // Powder — granular.
+    if (any('sand', 'salt', 'sugar', 'flour', 'dust', 'talc')) return 'powder';
+    if (any('ash', 'soot', 'cinder', 'glitter', 'gravel')) return 'powder';
+    if (any('snow', 'seed', 'gunpowder', 'confetti')) return 'powder';
+    return null;
+  }
+
   // Sanitize and shape whatever the LLM returned into a valid spec.
-  function finalizeSpec(displayName, key, raw) {
+  function finalizeSpec(displayName, key, raw, userDesc) {
     const kinds = ['static', 'powder', 'liquid', 'gas'];
     let kind = (raw && typeof raw.kind === 'string') ? raw.kind.toLowerCase() : 'powder';
     if (kinds.indexOf(kind) < 0) kind = 'powder';
+    // Hard override for names with unambiguous real-world kinds.
+    const override = kindOverrideFromName(key, userDesc);
+    if (override) kind = override;
 
     let density = Number(raw && raw.density);
     if (!isFinite(density)) density = 5;
@@ -952,6 +1028,37 @@
       out.lifeMin = lifeMin; out.lifeMax = lifeMax;
     }
 
+    // Name-based reaction backstops: if the model produced no reactions for
+    // an obviously-reactive element, add the canonical ones so the user
+    // sees the expected behaviour (fire burns plants, acid eats walls, etc).
+    const blob = (key + ' ' + (userDesc || '')).toLowerCase();
+    const any = (...words) => words.some(w => blob.indexOf(w) >= 0);
+    const hasReact = (other) => out.reactions.some(r => r.other === other);
+    const tryAdd = (other, becomes, chance) => {
+      if (!keyToId[other]) return;
+      if (becomes != null && !keyToId[becomes] && becomes !== key) return;
+      if (hasReact(other)) return;
+      out.reactions.push({ other, becomes, chance });
+    };
+    if (kind === 'gas' && any('fire', 'flame', 'inferno', 'ember', 'plasma')) {
+      tryAdd('plant', 'fire', 0.12);
+      tryAdd('oil', 'fire', 0.2);
+      tryAdd('wood', 'fire', 0.1);
+      tryAdd('water', null, 0.25);
+    }
+    if (kind === 'liquid' && any('lava', 'magma')) {
+      tryAdd('water', null, 0.2);
+      tryAdd('plant', 'fire', 0.15);
+    }
+    if (kind === 'liquid' && any('acid')) {
+      tryAdd('plant', null, 0.15);
+      tryAdd('wall', null, 0.04);
+      tryAdd('sand', null, 0.06);
+    }
+    if (kind === 'powder' && any('snow', 'ice')) {
+      tryAdd('fire', null, 0.2);
+    }
+
     return out;
   }
 
@@ -981,10 +1088,18 @@
     return `#${f(0)}${f(8)}${f(4)}`;
   }
 
-  // Offline / rate-limit fallback: keyword-sniff a plausible spec.
+  // Offline / rate-limit fallback: keyword-sniff a plausible spec. The
+  // registry is checked so reactions only reference elements that actually
+  // exist in this session.
   function fallbackSpec(displayName, key, desc) {
     const blob = (key + ' ' + (desc || '')).toLowerCase();
     const has = (...words) => words.some(w => blob.indexOf(w) >= 0);
+    const keyExists = (k) => keyToId[k] != null;
+    const react = (other, becomes, chance) =>
+      keyExists(other) && (becomes == null || keyExists(becomes))
+        ? { other, becomes, chance }
+        : null;
+    const reactList = (...rs) => rs.filter(Boolean);
 
     let kind = 'powder';
     let density = 5;
@@ -992,38 +1107,90 @@
     let flow = 0.55;
     let stickiness = 0;
     let buoyancy = 0.9;
+    let lifeMin = 60, lifeMax = 110;
+    let colorsOverride = null;
     let reactions = [];
 
-    if (has('fire', 'flame', 'inferno')) {
-      kind = 'gas'; density = 1; buoyancy = 1;
-      reactions = [];
+    if (has('fire', 'flame', 'inferno', 'ember', 'plasma', 'spark', 'lightning')) {
+      kind = 'gas'; density = 1; buoyancy = 1; lifeMin = 30; lifeMax = 70;
+      colorsOverride = ['#ff4020', '#ff8010', '#ffc040', '#ffe070', '#d02010'];
+      reactions = reactList(
+        react('water', null, 0.25),
+        react('plant', 'fire', 0.12),
+        react('oil', 'fire', 0.2),
+        react('wood', 'fire', 0.1),
+      );
     } else if (has('lava', 'magma')) {
-      kind = 'liquid'; density = 7; viscosity = 0.6;
-      reactions = [
-        { other: 'water', becomes: null, chance: 0.05 },
-      ];
-    } else if (has('smoke', 'steam', 'fog', 'mist', 'gas', 'vapor', 'cloud', 'spore')) {
-      kind = 'gas'; density = 2; buoyancy = 0.6;
-    } else if (has('ice', 'rock', 'stone', 'metal', 'crystal', 'wood', 'brick', 'glass', 'bone', 'web')) {
+      kind = 'liquid'; density = 8; viscosity = 0.8;
+      colorsOverride = ['#ff5020', '#ff8030', '#d03010', '#ffc040'];
+      reactions = reactList(
+        react('water', null, 0.2),
+        react('plant', 'fire', 0.15),
+        react('wood', 'fire', 0.12),
+      );
+    } else if (has('smoke', 'steam', 'fog', 'mist', 'vapor', 'cloud', 'spore', 'haze')) {
+      kind = 'gas'; density = 2; buoyancy = 0.6; lifeMin = 60; lifeMax = 120;
+      if (has('steam')) colorsOverride = ['#d8e8f0', '#b0c8d8', '#f0f6fa'];
+      else if (has('smoke')) colorsOverride = ['#606060', '#808080', '#4a4a4a', '#a0a0a0'];
+      else colorsOverride = ['#a0b8c8', '#c0d0dc', '#7890a0'];
+    } else if (has('ice', 'icicle')) {
+      kind = 'static'; density = 5;
+      colorsOverride = ['#c0e0ff', '#a0d0f0', '#e0f0ff', '#80b0e0'];
+    } else if (has('plant', 'leaf', 'vine', 'tree', 'grass', 'moss')) {
+      kind = 'static'; density = 3;
+      colorsOverride = ['#409040', '#60a050', '#308030', '#80b060'];
+    } else if (has('wood', 'timber', 'log', 'bark', 'twig')) {
+      kind = 'static'; density = 4;
+      colorsOverride = ['#7a4820', '#8a5828', '#5a3010', '#a06838'];
+    } else if (has('metal', 'iron', 'steel', 'copper', 'brass', 'gold', 'silver')) {
+      kind = 'static'; density = 8;
+      colorsOverride = ['#9a9a9a', '#b0b0b0', '#707070', '#c8c8c8'];
+    } else if (has('rock', 'stone', 'brick', 'concrete', 'crystal', 'glass', 'bone', 'web')) {
       kind = 'static';
-    } else if (has('honey', 'syrup', 'tar', 'glue', 'molasses', 'caramel')) {
+    } else if (has('honey', 'syrup', 'molasses', 'caramel')) {
       kind = 'liquid'; density = 6; viscosity = 0.9; stickiness = 0.7;
+      colorsOverride = ['#e8a030', '#d48020', '#ffc050', '#b86020'];
+    } else if (has('tar', 'glue', 'resin', 'pitch')) {
+      kind = 'liquid'; density = 6; viscosity = 0.95; stickiness = 0.85;
+      colorsOverride = ['#1a1008', '#2a1810', '#3a2418'];
     } else if (has('acid')) {
       kind = 'liquid'; density = 4; viscosity = 0.1;
-      reactions = [
-        { other: 'wall',  becomes: null, chance: 0.04 },
-        { other: 'sand',  becomes: null, chance: 0.04 },
-      ];
-    } else if (has('water', 'oil', 'slime', 'juice', 'milk', 'liquid', 'blood', 'goo', 'soda')) {
-      kind = 'liquid'; density = has('oil') ? 3 : 5; viscosity = has('oil') ? 0.3 : 0;
-      if (has('slime', 'goo')) { viscosity = 0.6; stickiness = 0.4; }
+      colorsOverride = ['#60ff30', '#80ff40', '#30d020', '#b0ff60'];
+      reactions = reactList(
+        react('wall', null, 0.04),
+        react('sand', null, 0.06),
+        react('plant', null, 0.15),
+      );
+    } else if (has('oil', 'gasoline', 'petrol', 'fuel')) {
+      kind = 'liquid'; density = 3; viscosity = 0.3;
+      colorsOverride = ['#2a1010', '#4a2810', '#1a0808', '#603020'];
+      reactions = reactList(react('fire', 'fire', 0.2));
+    } else if (has('water', 'juice', 'milk', 'wine', 'soda', 'liquid')) {
+      kind = 'liquid'; density = 5; viscosity = 0;
+    } else if (has('slime', 'goo', 'ooze')) {
+      kind = 'liquid'; density = 5; viscosity = 0.6; stickiness = 0.5;
+      colorsOverride = ['#60c060', '#40a040', '#80d080'];
+    } else if (has('blood')) {
+      kind = 'liquid'; density = 6; viscosity = 0.4;
+      colorsOverride = ['#a02020', '#801010', '#c03030', '#600808'];
+    } else if (has('ink', 'paint')) {
+      kind = 'liquid'; density = 5; viscosity = 0.2;
     } else if (has('snow')) {
       kind = 'powder'; density = 2; flow = 0.4;
-    } else if (has('flour', 'powder', 'dust', 'talc', 'ash')) {
+      colorsOverride = ['#ffffff', '#e8f0ff', '#d0e0f0', '#fafcff'];
+      reactions = reactList(react('fire', null, 0.25));
+    } else if (has('flour', 'powder', 'dust', 'talc')) {
       kind = 'powder'; flow = 1.0; density = 2;
-    } else if (has('gravel', 'rocks')) {
+    } else if (has('ash', 'soot', 'cinder')) {
+      kind = 'powder'; flow = 0.9; density = 2;
+      colorsOverride = ['#505050', '#707070', '#3a3a3a'];
+    } else if (has('gravel', 'rocks', 'pebbles')) {
       kind = 'powder'; flow = 0.15; density = 7;
-    } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar')) {
+    } else if (has('gunpowder')) {
+      kind = 'powder'; flow = 0.6; density = 4;
+      colorsOverride = ['#2a2a2a', '#404040', '#1a1a1a'];
+      reactions = reactList(react('fire', 'fire', 0.5));
+    } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar', 'rice', 'confetti')) {
       kind = 'powder'; flow = 0.55;
     }
 
@@ -1033,13 +1200,13 @@
       displayName: displayName.slice(0, 14).toLowerCase(),
       kind,
       density,
-      colors: fillFallbackColors(key),
+      colors: colorsOverride || fillFallbackColors(key),
       reactions,
       isBuiltIn: false,
     };
     if (kind === 'liquid') { out.viscosity = viscosity; out.stickiness = stickiness; }
     if (kind === 'powder') { out.flow = flow; out.stickiness = stickiness; }
-    if (kind === 'gas')    { out.buoyancy = buoyancy; out.lifeMin = 60; out.lifeMax = 110; }
+    if (kind === 'gas')    { out.buoyancy = buoyancy; out.lifeMin = lifeMin; out.lifeMax = lifeMax; }
     return out;
   }
 })();

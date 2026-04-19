@@ -8,6 +8,28 @@
   padding: 0;
 }
 
+/* Mobile: kill double-tap zoom, the "select the whole screen" long-press
+   selection, iOS callouts, and pinch. The canvas IS the app — there's no
+   text to select, and users who rest a finger on the canvas were triggering
+   browser-level select-all + zoom. */
+html, body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+
+/* Inside the modal we DO want selection for name/description text inputs. */
+.invent-modal input,
+.invent-modal textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 :root {
   --bg: #1a1714;
   --surface: #242018;
@@ -255,6 +277,9 @@ header h1 {
   touch-action: none;
   margin: 0 auto;
   order: 2;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #main-canvas {
@@ -262,6 +287,11 @@ header h1 {
   width: 100%;
   height: 100%;
   cursor: crosshair;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
 }
 
 #overlay-msg {
