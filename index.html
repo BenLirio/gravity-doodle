@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gravity Doodle</title>
   <meta property="og:title" content="Gravity Doodle">
-  <meta property="og:description" content="Draw any shape, then drop hundreds of sand particles and watch them pour through your sculpture.">
+  <meta property="og:description" content="Paint walls, sand, water, oil, fire, and plant — then pour more from the top. A tiny multi-material physics sandbox.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://benlirio.com/gravity-doodle/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,32 +19,42 @@
   <div id="app">
     <header>
       <h1>gravity doodle</h1>
-      <p id="tagline">draw, drop, keep drawing as it falls</p>
+      <p id="tagline">paint materials, watch them fight gravity</p>
     </header>
 
     <div id="controls">
-      <!-- DRAW PHASE: pen / erase / clear / drop -->
+      <!-- DRAW PHASE: material palette + clear + pour -->
       <div id="draw-controls">
-        <div id="tool-row" role="group" aria-label="drawing tool">
-          <span id="tool-label">tool:</span>
-          <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
-          <button id="btn-erase" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
+        <div id="tool-row" role="group" aria-label="material">
+          <span id="tool-label">paint:</span>
+          <button class="tool-btn mat-wall active"  data-material="wall"  onclick="setMaterial('wall')"  aria-pressed="true">wall</button>
+          <button class="tool-btn mat-sand"         data-material="sand"  onclick="setMaterial('sand')"  aria-pressed="false">sand</button>
+          <button class="tool-btn mat-water"        data-material="water" onclick="setMaterial('water')" aria-pressed="false">water</button>
+          <button class="tool-btn mat-oil"          data-material="oil"   onclick="setMaterial('oil')"   aria-pressed="false">oil</button>
+          <button class="tool-btn mat-fire"         data-material="fire"  onclick="setMaterial('fire')"  aria-pressed="false">fire</button>
+          <button class="tool-btn mat-plant"        data-material="plant" onclick="setMaterial('plant')" aria-pressed="false">plant</button>
+          <button class="tool-btn mat-erase"        data-material="erase" onclick="setMaterial('erase')" aria-pressed="false">erase</button>
           <button id="btn-clear" class="tool-btn clear-btn" onclick="clearAll()">clear</button>
         </div>
         <div id="action-row">
-          <button id="btn-drop" onclick="startDrop()">drop the sand</button>
+          <button id="btn-drop" onclick="startDrop()">pour wall</button>
         </div>
       </div>
 
-      <!-- PHYSICS PHASE: draw/erase during flow / pour more / reset / share -->
+      <!-- PHYSICS PHASE: keep painting while sim runs + pour more + reset + share -->
       <div id="physics-controls" class="hidden">
-        <div id="phys-tool-row" role="group" aria-label="edit while sand flows">
-          <span id="phys-tool-label">edit live:</span>
-          <button id="btn-draw-phys" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
-          <button id="btn-erase-phys" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
+        <div id="phys-tool-row" role="group" aria-label="edit while sim runs">
+          <span id="phys-tool-label">paint:</span>
+          <button class="tool-btn mat-wall active"  data-material="wall"  onclick="setMaterial('wall')"  aria-pressed="true">wall</button>
+          <button class="tool-btn mat-sand"         data-material="sand"  onclick="setMaterial('sand')"  aria-pressed="false">sand</button>
+          <button class="tool-btn mat-water"        data-material="water" onclick="setMaterial('water')" aria-pressed="false">water</button>
+          <button class="tool-btn mat-oil"          data-material="oil"   onclick="setMaterial('oil')"   aria-pressed="false">oil</button>
+          <button class="tool-btn mat-fire"         data-material="fire"  onclick="setMaterial('fire')"  aria-pressed="false">fire</button>
+          <button class="tool-btn mat-plant"        data-material="plant" onclick="setMaterial('plant')" aria-pressed="false">plant</button>
+          <button class="tool-btn mat-erase"        data-material="erase" onclick="setMaterial('erase')" aria-pressed="false">erase</button>
         </div>
         <div id="physics-row">
-          <button id="btn-pour" class="phys-btn" onclick="startDrop()">pour more</button>
+          <button id="btn-pour"  class="phys-btn" onclick="startDrop()">pour wall</button>
           <button id="btn-reset" class="phys-btn reset-btn" onclick="clearAll()">reset</button>
         </div>
         <div id="share-row">

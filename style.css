@@ -1,4 +1,5 @@
-/* Aesthetic: Risograph/zine print — charcoal dark background, warm amber/orange/red sand tones, Space Mono, ink-bleed informal feel */
+/* Aesthetic: Risograph/zine print — charcoal dark background, Space Mono, ink-bleed informal feel.
+   Material palette uses small coloured swatches per button. */
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -14,8 +15,17 @@
   --amber: #e8a030;
   --border: #3a3020;
   --btn-bg: #2e2718;
-  --btn-active: #e8a030;
   --btn-active-text: #1a1714;
+
+  /* Material accent colours — used as the button's active background and as
+     a small swatch dot when inactive. Picked to roughly match in-sim colour. */
+  --mat-wall:  #d8c8a0;
+  --mat-sand:  #e8a030;
+  --mat-water: #4aa8d8;
+  --mat-oil:   #3a2e20;
+  --mat-fire:  #ff6020;
+  --mat-plant: #6ab040;
+  --mat-erase: #808080;
 }
 
 html, body {
@@ -36,7 +46,7 @@ body {
 
 #app {
   width: 100%;
-  max-width: 420px;
+  max-width: 460px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -68,15 +78,12 @@ header h1 {
   position: relative;
   width: 100%;
   aspect-ratio: 3 / 4;
-  /* Cap the canvas so the action button stays visible on short viewports.
-     Subtract roughly the space used by header + controls + padding. */
-  max-height: calc(100dvh - 280px);
+  max-height: calc(100dvh - 320px);
   border: 2px solid var(--border);
   background: #0f0e0c;
   overflow: hidden;
   touch-action: none;
   margin: 0 auto;
-  /* If max-height clamps, keep the aspect ratio by limiting width too. */
   aspect-ratio: 3 / 4;
 }
 
@@ -158,35 +165,47 @@ header h1 {
   cursor: not-allowed;
 }
 
-#tool-row {
+#tool-row,
+#phys-tool-row {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
   justify-content: center;
   align-items: center;
 }
 
-#tool-label {
+#tool-label,
+#phys-tool-label {
   font-size: 0.7rem;
   color: var(--muted);
   letter-spacing: 0.12em;
   margin-right: 4px;
   text-transform: lowercase;
+  width: 100%;
+  text-align: left;
 }
 
 .tool-btn {
-  flex: 1;
+  flex: 1 0 auto;
+  min-width: 56px;
   max-width: 90px;
-  height: 36px;
+  height: 32px;
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--border);
   font-family: inherit;
-  font-size: 0.72rem;
-  letter-spacing: 0.1em;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
   cursor: pointer;
   border-radius: 0;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
   text-transform: lowercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  position: relative;
 }
 
 .tool-btn:hover {
@@ -194,12 +213,34 @@ header h1 {
   border-color: var(--muted);
 }
 
-.tool-btn.active {
-  color: var(--btn-active-text);
-  background: var(--btn-active);
-  border-color: var(--btn-active);
-  font-weight: 700;
+/* Swatch dot on material buttons */
+.tool-btn[data-material]::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--swatch, transparent);
+  border: 1px solid rgba(255,255,255,0.15);
+  flex-shrink: 0;
 }
+
+.tool-btn.mat-wall  { --swatch: var(--mat-wall); }
+.tool-btn.mat-sand  { --swatch: var(--mat-sand); }
+.tool-btn.mat-water { --swatch: var(--mat-water); }
+.tool-btn.mat-oil   { --swatch: var(--mat-oil); }
+.tool-btn.mat-fire  { --swatch: var(--mat-fire); }
+.tool-btn.mat-plant { --swatch: var(--mat-plant); }
+.tool-btn.mat-erase { --swatch: var(--mat-erase); }
+
+/* Active material buttons get a filled look in that material's accent. */
+.tool-btn.active.mat-wall  { background: var(--mat-wall);  color: #1a1714; border-color: var(--mat-wall);  font-weight: 700; }
+.tool-btn.active.mat-sand  { background: var(--mat-sand);  color: #1a1714; border-color: var(--mat-sand);  font-weight: 700; }
+.tool-btn.active.mat-water { background: var(--mat-water); color: #1a1714; border-color: var(--mat-water); font-weight: 700; }
+.tool-btn.active.mat-oil   { background: var(--mat-oil);   color: #f0e0c0; border-color: var(--mat-oil);   font-weight: 700; }
+.tool-btn.active.mat-fire  { background: var(--mat-fire);  color: #1a1714; border-color: var(--mat-fire);  font-weight: 700; }
+.tool-btn.active.mat-plant { background: var(--mat-plant); color: #1a1714; border-color: var(--mat-plant); font-weight: 700; }
+.tool-btn.active.mat-erase { background: var(--mat-erase); color: #1a1714; border-color: var(--mat-erase); font-weight: 700; }
 
 .tool-btn.clear-btn {
   color: var(--muted);
@@ -212,21 +253,6 @@ header h1 {
 }
 
 /* ── Physics phase controls ─────────────────────────────────────────────── */
-
-#phys-tool-row {
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  align-items: center;
-}
-
-#phys-tool-label {
-  font-size: 0.7rem;
-  color: var(--muted);
-  letter-spacing: 0.12em;
-  margin-right: 4px;
-  text-transform: lowercase;
-}
 
 #physics-row {
   display: flex;
@@ -297,18 +323,24 @@ header h1 {
   margin-top: 2px;
 }
 
-/* Short viewports: tighten everything so controls are visible without scrolling. */
-@media (max-height: 720px) {
+/* Short viewports: tighten. */
+@media (max-height: 780px) {
   body { padding: 8px 8px 12px; }
   #app { gap: 8px; }
   header h1 { font-size: 1.2rem; }
   #tagline { font-size: 0.68rem; }
-  #canvas-wrap { max-height: calc(100dvh - 250px); }
+  #canvas-wrap { max-height: calc(100dvh - 300px); }
   #btn-drop { height: 46px; font-size: 0.9rem; }
   #btn-share { height: 44px; font-size: 0.82rem; }
   .phys-btn { height: 40px; }
+  .tool-btn { height: 30px; font-size: 0.66rem; min-width: 52px; }
 }
 
-@media (max-height: 560px) {
-  #canvas-wrap { max-height: calc(100dvh - 230px); }
+@media (max-height: 620px) {
+  #canvas-wrap { max-height: calc(100dvh - 270px); }
+}
+
+/* Narrow phones: palette is two rows but that's ok — we have the wrap. */
+@media (max-width: 360px) {
+  .tool-btn { min-width: 48px; font-size: 0.62rem; }
 }
