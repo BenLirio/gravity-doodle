@@ -190,11 +190,13 @@
         if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
         const i = idx(nc, nr);
         if (useMode === 'draw') {
-          // While sand is flowing, don't overwrite existing sand — let it
-          // keep falling. Only convert empty cells (and existing walls) into
-          // wall. This way pen strokes during physics create new obstacles
-          // without deleting mid-flight particles.
-          if (dropping && grid[i] === SAND) continue;
+          // Pen always converts the cell to WALL — including cells that
+          // currently hold SAND. Previously we skipped SAND cells to avoid
+          // "deleting" mid-flight particles, but that made it impossible to
+          // close a hole while sand was actively streaming through it (the
+          // stream itself occupied the cells you were trying to paint).
+          // Replacing the sand with wall is the intuitive behaviour: the
+          // pen does what it looks like it should do.
           grid[i]   = WALL;
           colors[i] = null;
         } else if (useMode === 'erase') {
