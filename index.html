@@ -31,7 +31,7 @@
       <div id="tool-row" role="group" aria-label="material palette">
         <div class="palette-label">paint:</div>
         <div id="palette-buttons">
-          <!-- built-in material buttons, rendered by JS -->
+          <!-- material buttons rendered by JS — three seed materials + invented ones -->
         </div>
         <button id="btn-invent" class="invent-btn" onclick="openInvent()" aria-label="invent new element">
           <span class="invent-plus">+</span>
@@ -45,18 +45,27 @@
       <div id="overlay-msg" class="hidden"></div>
     </div>
 
-    <p id="hint">paint on the canvas. tap "invent element" to add your own rule.</p>
+    <p id="hint">paint with your finger. invent your own elements — describe the physics in plain words.</p>
   </div>
 
   <!-- Invent modal -->
   <div id="invent-overlay" class="invent-overlay hidden" role="dialog" aria-labelledby="invent-title">
     <div class="invent-modal">
-      <h3 id="invent-title">invent a new element</h3>
-      <p class="invent-hint">name it. describe how it behaves. the AI generates the physics.</p>
+      <h3 id="invent-title">invent an element</h3>
+      <p class="invent-hint">give it a name. describe how it should behave in plain words. the AI invents the physics.</p>
       <label for="invent-name" class="invent-field-label">name</label>
-      <input id="invent-name" type="text" maxlength="20" placeholder="e.g. lava, honey, glitter, acid">
-      <label for="invent-desc" class="invent-field-label">what it does <span class="invent-optional">(optional)</span></label>
-      <textarea id="invent-desc" maxlength="240" placeholder="e.g. thick molten rock that burns plants and sinks in water"></textarea>
+      <input id="invent-name" type="text" maxlength="24" placeholder="e.g. honey, lava, glitter, acid">
+      <label for="invent-desc" class="invent-field-label">what it does <span class="invent-optional">(optional but recommended)</span></label>
+      <textarea id="invent-desc" maxlength="280" placeholder="e.g. thick golden honey, very viscous, barely flows, sticky, dissolves slowly in water"></textarea>
+      <div class="invent-examples" id="invent-examples">
+        <span class="invent-examples-label">try:</span>
+        <button type="button" class="invent-example" data-name="honey" data-desc="thick golden honey, very viscous, barely flows, sticky, traps fire and dissolves slowly in water">honey</button>
+        <button type="button" class="invent-example" data-name="lava" data-desc="molten rock, slow heavy lava that ignites plants and oil, hardens water into steam">lava</button>
+        <button type="button" class="invent-example" data-name="acid" data-desc="bright green acid that eats through walls and plants and dilutes in water">acid</button>
+        <button type="button" class="invent-example" data-name="glitter" data-desc="rainbow glitter dust, extremely fine, sparkles in many colors, lighter than sand">glitter</button>
+        <button type="button" class="invent-example" data-name="snow" data-desc="soft white snow, falls slow and fluffy, melts on contact with fire">snow</button>
+        <button type="button" class="invent-example" data-name="smoke" data-desc="grey smoke that rises and slowly fades">smoke</button>
+      </div>
       <p id="invent-status" class="invent-status"></p>
       <div class="invent-row">
         <button type="button" id="invent-cancel" onclick="closeInvent()">cancel</button>

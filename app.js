@@ -1,22 +1,25 @@
-// Gravity Doodle — falling-sand sandbox with user-invented elements.
+// Gravity Doodle — an AI-driven falling-sand sandbox.
 //
-// The user can paint with 6 built-in elements (wall, sand, water, oil, fire,
-// plant), or tap "invent element" to generate a new one via AI. The LLM
-// returns a structured physics spec (kind, density, colors, reactions with
-// other elements) and the new element joins the palette for the session.
+// The seed palette is intentionally tiny (wall, sand, water). Everything
+// else is invented by the user via the AI: name an element, describe how
+// it behaves in plain words, and the LLM returns a structured physics
+// spec that joins the palette for the session.
 //
 // Physics kinds:
-//   static   — never moves (wall-like)
-//   powder   — falls straight or diagonally, piles; denser powders sink
-//              through lighter liquids (sand-like)
-//   liquid   — falls + spreads sideways; denser liquids sink through
-//              lighter ones (water/oil-like)
-//   gas      — rises; escapes through the top of the screen (fire-like)
+//   static   — never moves (wall, plant, ice).
+//   powder   — falls straight or diagonally and piles. denser powders
+//              sink through lighter liquids. a `flow` 0..1 controls how
+//              steep the pile is (0 = stacks vertically like cubes,
+//              1 = collapses flat like flour).
+//   liquid   — falls and spreads sideways. denser liquids sink below
+//              lighter ones. `viscosity` 0..1 controls how reluctant the
+//              liquid is to move sideways or fall (0 = water, 1 = honey).
+//   gas      — rises and escapes the top. `lifeMin/lifeMax` decay it.
 //
-// Reactions are per-element: when element A is next to element B, with
-// some probability per frame, cell B turns into element C (or EMPTY). This
-// is the generalization of the built-in fire-ignites-plant /
-// water-extinguishes-fire / plant-grows-into-water rules.
+// Reactions: per element, list `{ other, becomes, chance }`. When this
+// element is adjacent to `other`, with `chance` per frame `other`'s cell
+// becomes `becomes` (or `null`/`"empty"` to destroy it). Built-in rules
+// use this same system.
 
 (function () {
   // ── Constants ──────────────────────────────────────────────────────────────
@@ -27,34 +30,29 @@
   const EMPTY = 0;
 
   // ── Element registry ───────────────────────────────────────────────────────
-  // Each element has a stable numeric id (0 = EMPTY is reserved). We keep a
-  // registry so the grid can store a single Uint8 per cell.
+  // 0 = EMPTY is reserved. Each element has a stable numeric id so the grid
+  // can store one Uint8 per cell.
   //
-  // Shape:
   //   {
-  //     id: number,
-  //     key: string,                // lowercase slug, unique
-  //     displayName: string,        // for the UI
-  //     kind: 'static'|'powder'|'liquid'|'gas',
-  //     density: number,            // 0..10 (powder/liquid: larger sinks through smaller of same kind or through lighter liquids)
-  //     colors: string[],           // 3-8 hex colors; picked at paint time
-  //     lifeMin: number,            // gas decay lifetime (frames). 0 = no decay (ignored for non-gas)
-  //     lifeMax: number,
-  //     burns: boolean,             // fire-likes will try to ignite this (legacy flag)
-  //     isBuiltIn: boolean,
-  //     // Reactions: when THIS element is adjacent to `other`, there's a chance
-  //     // per frame that `other`'s cell becomes `becomes`. Built-in rules use
-  //     // this system too.
-  //     reactions: [{ other: key, becomes: key|null, chance: number }]
+  //     id, key, displayName,
+  //     kind:        'static'|'powder'|'liquid'|'gas',
+  //     density:     1..9,
+  //     viscosity:   0..1   (liquid only)
+  //     flow:        0..1   (powder only — 1 = flows like flour, 0 = stacks)
+  //     buoyancy:    0..1   (gas only — chance per frame to rise)
+  //     stickiness:  0..1   (liquid/powder — chance per frame to stay put)
+  //     lifeMin/lifeMax     (gas only)
+  //     colors:      hex strings
+  //     reactions:   [{other, becomes, chance}]
+  //     isBuiltIn
   //   }
 
   const registry = {};            // id -> spec
   const keyToId  = {};            // key -> id
 
   function registerElement(spec) {
-    const id = spec.id;
-    registry[id] = spec;
-    keyToId[spec.key] = id;
+    registry[spec.id] = spec;
+    keyToId[spec.key] = spec.id;
   }
 
   function nextCustomId() {
@@ -63,80 +61,38 @@
     return max + 1;
   }
 
-  // ── Built-in elements ──────────────────────────────────────────────────────
-  // IDs are stable so we can refer to them from reactions.
+  // ── Built-in seed elements ─────────────────────────────────────────────────
+  // Three only — the rest are AI-invented. Stable ids so reactions can refer
+  // to them.
   const WALL_ID  = 1;
   const SAND_ID  = 2;
   const WATER_ID = 3;
-  const OIL_ID   = 4;
-  const FIRE_ID  = 5;
-  const PLANT_ID = 6;
 
-  // Sand palettes — picked per session so sculptures stay coherent.
-  const SAND_PALETTES = [
-    ['#e8a030', '#e06020', '#d44010', '#f0c048', '#c83030', '#e87828', '#f0d060', '#b84020'],
-    ['#3ec7d0', '#2e8cc8', '#1d5aa8', '#6ee0d8', '#20b2aa', '#4aa0d8', '#b0e8e0', '#0d4b78'],
-    ['#7cb850', '#4a8028', '#2e5a18', '#b8d870', '#6a9838', '#a0c060', '#d8e890', '#345010'],
-    ['#ff4da6', '#ff80c0', '#c830a0', '#ffb0dc', '#d850b8', '#9040b0', '#ff60d0', '#6820a0'],
-    ['#f0f0f0', '#c8c8c8', '#989898', '#707070', '#505050', '#e0e0e0', '#b0b0b0', '#383838'],
-    ['#ffb0b0', '#ffd8a0', '#fff0a0', '#b0e8b0', '#b0d8ff', '#d8b0ff', '#ffc0e8', '#a0f0d8'],
-    ['#c8ff00', '#00ffd0', '#ff00c8', '#60ff40', '#30e8e8', '#f040ff', '#a0ff80', '#ff80ff'],
-    ['#8c5a28', '#b07840', '#d89860', '#5a3818', '#a06838', '#c89068', '#e8b880', '#3c2410'],
-  ];
-  let sessionSandPalette = SAND_PALETTES[0];
+  // Canonical sand: warm amber, the same every time. Per the user, the sand
+  // palette is its identity — randomising it broke recognition.
+  const SAND_PALETTE = ['#e8a030', '#e06020', '#d44010', '#f0c048', '#c83030', '#e87828', '#f0d060', '#b84020'];
 
   function initBuiltIns() {
     registerElement({
       id: WALL_ID, key: 'wall', displayName: 'wall',
       kind: 'static', density: 10,
-      colors: ['#d8c8a0'],
-      burns: false, isBuiltIn: true,
+      colors: ['#d8c8a0', '#c8b890', '#b8a880'],
+      isBuiltIn: true,
       reactions: [],
     });
     registerElement({
       id: SAND_ID, key: 'sand', displayName: 'sand',
-      kind: 'powder', density: 5,
-      colors: sessionSandPalette,
-      burns: false, isBuiltIn: true,
+      kind: 'powder', density: 5, flow: 0.55, stickiness: 0,
+      colors: SAND_PALETTE,
+      isBuiltIn: true,
       reactions: [],
     });
     registerElement({
       id: WATER_ID, key: 'water', displayName: 'water',
-      kind: 'liquid', density: 5,
+      kind: 'liquid', density: 5, viscosity: 0, stickiness: 0,
       colors: ['#4aa8d8', '#3e9ac8', '#62b8e0', '#2e84b8', '#6cc0e8'],
-      burns: false, isBuiltIn: true,
-      // Extinguishes fire:
-      reactions: [
-        { other: 'fire', becomes: null, chance: 1.0 },
-      ],
-    });
-    registerElement({
-      id: OIL_ID, key: 'oil', displayName: 'oil',
-      kind: 'liquid', density: 3, // lighter than water
-      colors: ['#3a2e20', '#4a3a28', '#2a2218', '#5a4830', '#3e3020'],
-      burns: true, isBuiltIn: true,
+      isBuiltIn: true,
       reactions: [],
-    });
-    registerElement({
-      id: FIRE_ID, key: 'fire', displayName: 'fire',
-      kind: 'gas', density: 1,
-      colors: ['#ff6020', '#ff8840', '#ffb060', '#ff4010', '#ffd080', '#ff3008'],
-      burns: false, isBuiltIn: true, lifeMin: 60, lifeMax: 100,
-      // Fire ignites oil and plant:
-      reactions: [
-        { other: 'oil',   becomes: 'fire', chance: 0.08 },
-        { other: 'plant', becomes: 'fire', chance: 0.08 },
-      ],
-    });
-    registerElement({
-      id: PLANT_ID, key: 'plant', displayName: 'plant',
-      kind: 'static', density: 8,
-      colors: ['#4a9028', '#6ab040', '#5ca038', '#3a7818', '#7ac050', '#2e5a10'],
-      burns: true, isBuiltIn: true,
-      // Plant grows into adjacent water:
-      reactions: [
-        { other: 'water', becomes: 'plant', chance: 0.008 },
-      ],
     });
   }
 
@@ -146,11 +102,13 @@
   let grid;        // Uint8Array of element ids
   let colors;      // per-cell color strings
   let life;        // Uint8Array auxiliary lifetime (gas decay)
-  let flags;       // Uint8Array per-cell flags (bit0 = moved this tick)
+  let flags;       // Uint8Array per-cell flags (bit0=moved, bit1=reacted)
 
-  let selectedKey = 'wall';
+  let selectedKey = 'sand';
   let isPointerDown = false;
   let lastCell = null;
+  let lastPointer = null;        // {c, r} of most recent pointer position
+  let holdPaintTimer = null;     // continuous-paint interval while held still
   let animId = null;
 
   // Active pours: top-of-screen curtains. { id, frames, total, kind }
@@ -161,7 +119,6 @@
     canvas = document.getElementById('main-canvas');
     ctx = canvas.getContext('2d');
 
-    pickSessionSandPalette();
     initBuiltIns();
     rebuildPalette();
 
@@ -172,18 +129,14 @@
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup',   onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
+    canvas.addEventListener('pointerleave', onPointerUp);
 
     animId = requestAnimationFrame(loop);
 
-    showOverlay('paint materials here\nwith your finger or mouse\n\ntap "invent element" to add your own');
+    showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
     syncActionLabel();
     bindModal();
   });
-
-  function pickSessionSandPalette() {
-    sessionSandPalette = SAND_PALETTES[Math.floor(Math.random() * SAND_PALETTES.length)];
-    if (registry[SAND_ID]) registry[SAND_ID].colors = sessionSandPalette;
-  }
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
@@ -221,9 +174,9 @@
     if (!host) return;
     host.innerHTML = '';
 
-    // Keep built-ins in their original order, then custom elements in order
-    // of insertion, then erase at the end.
-    const orderedIds = [WALL_ID, SAND_ID, WATER_ID, OIL_ID, FIRE_ID, PLANT_ID];
+    // Seeds first in their canonical order, then invented elements in insertion
+    // order, then the erase tool.
+    const orderedIds = [WALL_ID, SAND_ID, WATER_ID];
     const customIds = Object.keys(registry)
       .map(n => +n)
       .filter(id => !registry[id].isBuiltIn)
@@ -235,10 +188,8 @@
       if (!spec) continue;
       host.appendChild(buildMaterialButton(spec));
     }
-    // Erase at end.
     host.appendChild(buildEraseButton());
 
-    // Reflect active selection.
     refreshActiveClass();
   }
 
@@ -248,7 +199,6 @@
     btn.className = 'tool-btn ' + (spec.isBuiltIn ? ('mat-' + spec.key) : 'mat-custom');
     btn.setAttribute('data-key', spec.key);
     if (!spec.isBuiltIn) {
-      // Custom elements provide their own swatch via inline style.
       btn.style.setProperty('--swatch', spec.colors[0] || '#e8a030');
     }
     btn.textContent = spec.displayName.slice(0, 14);
@@ -279,8 +229,7 @@
     syncActionLabel();
   };
 
-  // Static materials and erase can't be poured — fall back to sand so the
-  // action button always does something sensible.
+  // Static materials and erase can't be poured — fall back to sand.
   function pourableKeyFor(key) {
     if (key === 'erase') return 'sand';
     const id = keyToId[key];
@@ -293,19 +242,17 @@
 
   function syncActionLabel() {
     const drop = document.getElementById('btn-drop');
-    const label = 'pour ' + pourableKeyFor(selectedKey);
-    if (drop) drop.textContent = label;
+    if (drop) drop.textContent = 'pour ' + pourableKeyFor(selectedKey);
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.clearAll = function () {
     pours = [];
-    pickSessionSandPalette();
     initGrid();
-    selectedKey = 'wall';
+    selectedKey = 'sand';
     refreshActiveClass();
     syncActionLabel();
-    showOverlay('paint materials here\nwith your finger or mouse\n\ntap "invent element" to add your own');
+    showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
   };
 
   // ── Drawing ────────────────────────────────────────────────────────────────
@@ -345,13 +292,12 @@
         if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
         const i = idx(nc, nr);
         if (spec.kind === 'static') {
-          // Static paints overwrite anything.
           grid[i] = id;
           colors[i] = colorForSpec(spec);
           life[i] = 0;
         } else {
           // Dynamic: only paint into empty cells so we don't wipe other
-          // materials by accident.
+          // materials.
           if (grid[i] === EMPTY || grid[i] === id) {
             grid[i] = id;
             colors[i] = colorForSpec(spec);
@@ -378,14 +324,33 @@
     }
   }
 
+  function startHoldPaint() {
+    stopHoldPaint();
+    // Fires ~30/s while the pointer is held. Even if the cursor is perfectly
+    // still, dynamic materials keep being deposited at the cursor — so
+    // holding over one spot pours material continuously instead of stopping
+    // after the first drop. (User-reported bug: paint stalls when finger
+    // doesn't move.)
+    holdPaintTimer = setInterval(() => {
+      if (!isPointerDown || !lastPointer) return;
+      paintAt(lastPointer.c, lastPointer.r, 2);
+    }, 33);
+  }
+
+  function stopHoldPaint() {
+    if (holdPaintTimer) { clearInterval(holdPaintTimer); holdPaintTimer = null; }
+  }
+
   function onPointerDown(e) {
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     isPointerDown = true;
     const cell = canvasCell(e);
     lastCell = cell;
+    lastPointer = cell;
     paintAt(cell.c, cell.r, 2);
     hideOverlay();
+    startHoldPaint();
   }
 
   function onPointerMove(e) {
@@ -394,11 +359,14 @@
     const cell = canvasCell(e);
     if (lastCell) paintLine(lastCell.c, lastCell.r, cell.c, cell.r, 2);
     lastCell = cell;
+    lastPointer = cell;
   }
 
   function onPointerUp() {
     isPointerDown = false;
     lastCell = null;
+    lastPointer = null;
+    stopHoldPaint();
   }
 
   // ── Pour ───────────────────────────────────────────────────────────────────
@@ -422,7 +390,7 @@
       if (!spec) continue;
       for (let s = 0; s < SPAWN_RATE; s++) {
         const c = Math.floor(Math.random() * COLS);
-        // Gases rise → spawn near bottom; everything else falls → spawn near top.
+        // Gases rise → spawn near bottom; everything else → top.
         const r = (spec.kind === 'gas')
           ? (Math.random() < 0.5 ? ROWS - 1 : ROWS - 2)
           : (Math.random() < 0.5 ? 0 : 1);
@@ -445,13 +413,9 @@
   // ── Simulation ─────────────────────────────────────────────────────────────
   function clearFlags() { flags.fill(0); }
 
-  // Iterate a cell's 4 orthogonal + 4 diagonal neighbours.
   const NBR_DIRS = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
 
   function applyReactions() {
-    // For each cell, check that element's reactions against its neighbours.
-    // We use flags (bit1 = reacted this tick) so a cell transformed by a
-    // reaction doesn't immediately re-react as its new type in the same tick.
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const i = idx(c, r);
@@ -498,7 +462,7 @@
   function step() {
     clearFlags();
 
-    // Bottom row is open sky for falling things — they drop off.
+    // Bottom row is open sky for falling things.
     for (let c = 0; c < COLS; c++) {
       const i = idx(c, ROWS - 1);
       const id = grid[i];
@@ -509,7 +473,7 @@
         grid[i] = EMPTY; colors[i] = null;
       }
     }
-    // Top row is open sky for gases — they escape upward.
+    // Top row is open sky for gases.
     for (let c = 0; c < COLS; c++) {
       const i = idx(c, 0);
       const id = grid[i];
@@ -523,7 +487,7 @@
 
     applyReactions();
 
-    // Gas rise (top to bottom so a gas doesn't ride its own update back up).
+    // Gas rise (top to bottom so a rising gas isn't moved twice).
     for (let r = 0; r < ROWS; r++) {
       const cols = shuffledCols();
       for (let ci = 0; ci < COLS; ci++) {
@@ -544,12 +508,14 @@
           }
         }
 
-        // Rise straight.
+        // Buoyancy: chance to skip rising this frame.
+        const buoy = (typeof spec.buoyancy === 'number') ? spec.buoyancy : 0.9;
+        if (Math.random() > buoy) continue;
+
         if (r - 1 >= 0) {
           const up = idx(c, r - 1);
           if (grid[up] === EMPTY) { swap(i, up); flags[up] |= 1; continue; }
         }
-        // Diagonal up.
         const goLeft = Math.random() < 0.5;
         const d1 = goLeft ? -1 : 1, d2 = -d1;
         if (tryGasDiag(c, r, d1) || tryGasDiag(c, r, d2)) continue;
@@ -567,24 +533,32 @@
         if (!id) continue;
         const spec = registry[id];
         if (!spec) continue;
-        if (spec.kind === 'powder')  stepPowder(c, r, i, spec);
+        if (spec.kind === 'powder')      stepPowder(c, r, i, spec);
         else if (spec.kind === 'liquid') stepLiquid(c, r, i, spec);
       }
     }
   }
 
   function stepPowder(c, r, i, spec) {
-    // Straight down into empty, or into any liquid (powders are denser than
-    // liquids for gameplay purposes — sand sinks in water, etc.).
+    // Stickiness: a sticky powder occasionally refuses to move (e.g. wet sand).
+    const stick = (typeof spec.stickiness === 'number') ? spec.stickiness : 0;
+    if (stick > 0 && Math.random() < stick * 0.7) return;
+
     if (r + 1 < ROWS) {
       const below = idx(c, r + 1);
       const bt = grid[below];
       if (bt === EMPTY) { swap(i, below); flags[below] |= 1; return; }
       const bSpec = registry[bt];
-      if (bSpec && bSpec.kind === 'liquid') {
+      // Powders sink through liquids of lower density.
+      if (bSpec && bSpec.kind === 'liquid' && bSpec.density < spec.density + 0.5) {
         swap(i, below); flags[below] |= 1; return;
       }
     }
+
+    // Diagonal flow controlled by `flow` 0..1. Low flow = high angle of repose.
+    const flow = (typeof spec.flow === 'number') ? spec.flow : 0.55;
+    if (Math.random() > flow) return;
+
     const goLeft = Math.random() < 0.5;
     const d1 = goLeft ? -1 : 1, d2 = -d1;
     if (tryPowderDiag(c, r, d1, spec)) return;
@@ -601,13 +575,36 @@
       swap(idx(c, r), ni); flags[ni] |= 1; return true;
     }
     const nSpec = registry[nt];
-    if (nSpec && nSpec.kind === 'liquid') {
+    if (nSpec && nSpec.kind === 'liquid' && nSpec.density < spec.density + 0.5) {
       swap(idx(c, r), ni); flags[ni] |= 1; return true;
     }
     return false;
   }
 
   function stepLiquid(c, r, i, spec) {
+    const visc = (typeof spec.viscosity === 'number') ? spec.viscosity : 0;
+    const stick = (typeof spec.stickiness === 'number') ? spec.stickiness : 0;
+
+    // Stickiness: chance to anchor (honey/syrup clinging to walls/each other).
+    if (stick > 0) {
+      // Check if there's a static or higher-density solid neighbour to cling to.
+      let supported = false;
+      for (const [dc, dr] of NBR_DIRS) {
+        const nc = c + dc, nr = r + dr;
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+        const nid = grid[idx(nc, nr)];
+        if (!nid || nid === grid[i]) continue;
+        const nSpec = registry[nid];
+        if (!nSpec) continue;
+        if (nSpec.kind === 'static' || nSpec.kind === 'powder') { supported = true; break; }
+      }
+      if (supported && Math.random() < stick) return;
+    }
+
+    // Viscosity: a viscous liquid sometimes refuses to move at all this frame.
+    // viscosity=1 → moves ~1/5 of frames; viscosity=0 → moves every frame.
+    if (visc > 0 && Math.random() < visc * 0.8) return;
+
     // Falling + density separation.
     if (r + 1 < ROWS) {
       const below = idx(c, r + 1);
@@ -615,7 +612,6 @@
       if (bt === EMPTY) { swap(i, below); flags[below] |= 1; return; }
       const bSpec = registry[bt];
       if (bSpec && bSpec.kind === 'liquid' && bSpec.density < spec.density) {
-        // Heavier liquid sinks through lighter one.
         swap(i, below); flags[below] |= 1; return;
       }
       // Diagonal fall.
@@ -624,7 +620,10 @@
       if (tryLiquidDiag(c, r, d1, spec)) return;
       if (tryLiquidDiag(c, r, d2, spec)) return;
     }
-    // Sideways spread (fluid behaviour).
+
+    // Sideways spread: viscous liquids spread less (extra dampening).
+    if (visc > 0 && Math.random() < visc * 0.5) return;
+
     const goLeft = Math.random() < 0.5;
     const d1 = goLeft ? -1 : 1, d2 = -d1;
     if (trySideways(c, r, d1)) return;
@@ -714,6 +713,14 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeInvent();
     });
+    // Example chips: click to fill the form, then user can submit (or tweak).
+    document.querySelectorAll('.invent-example').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('invent-name').value = btn.getAttribute('data-name') || '';
+        document.getElementById('invent-desc').value = btn.getAttribute('data-desc') || '';
+        document.getElementById('invent-name').focus();
+      });
+    });
   }
 
   window.openInvent = function () {
@@ -764,7 +771,6 @@
       setMaterial(finalized.key);
       closeInvent();
     } catch (e) {
-      // Local fallback so the user never dead-ends.
       try {
         const fb = fallbackSpec(nameRaw, key, descRaw);
         registerElement(fb);
@@ -783,56 +789,73 @@
   }
 
   // ── AI call ────────────────────────────────────────────────────────────────
+  // We use the flagship gpt-5.4 model (not mini) because designing a
+  // coherent physics spec — picking density, viscosity, stickiness, flow,
+  // colors, AND reactive behaviour against existing elements all at once —
+  // is exactly the multi-step reasoning case the flagship is for. The user
+  // explicitly asked for the best model.
   async function generateElement(name, desc) {
     const existing = Object.keys(keyToId);
     const otherList = existing.join(', ');
 
     const SYSTEM_PROMPT = [
-      'You design falling-sand elements for a tiny browser physics sandbox.',
-      'Given an element name (and optional vibe), output ONE strict JSON object describing its physics.',
+      'You design elements for a falling-sand physics sandbox.',
+      'Given an element name (and optional description), output ONE strict JSON object describing how it behaves.',
+      'Be CREATIVE and SPECIFIC: density, viscosity, stickiness, flow, colors, and reactions should reflect the user\'s description, not generic defaults.',
       '',
-      'Schema (all fields required):',
+      'Schema (all fields required unless marked optional):',
       '{',
       '  "kind": "static" | "powder" | "liquid" | "gas",',
-      '  "density": integer 1-9,',
-      '  "colors": array of 3-6 hex strings like "#aabbcc" — vivid, coherent, readable on near-black,',
-      '  "reactions": array of 0-3 objects, each { "other": "<existing-element-key>", "becomes": "<existing-element-key-or-empty>", "chance": number 0.005-0.2 },',
-      '  "lifeMin": integer 0-120 (only meaningful when kind=="gas"; 0 means "no decay"),',
-      '  "lifeMax": integer 0-150 (>= lifeMin)',
+      '  "density": number 1-9 (heavier sinks below lighter of same kind, and powders sink through lighter liquids),',
+      '  "viscosity": number 0-1 (LIQUID ONLY: 0=water, 0.4=oil, 0.7=syrup, 0.95=tar/honey. Higher = thicker, slower, less spread),',
+      '  "flow": number 0-1 (POWDER ONLY: 1=flour/dust spreads flat, 0.5=sand piles, 0.1=gravel stacks steeply),',
+      '  "stickiness": number 0-1 (LIQUID/POWDER: 0=normal, 0.5=sticky/wet, 0.9=glue. Sticky things cling to walls and resist falling),',
+      '  "buoyancy": number 0-1 (GAS ONLY: 1=hot fast-rising fire, 0.5=lazy smoke, 0.2=heavy fog),',
+      '  "lifeMin": integer 0-150 (GAS ONLY: 0=no decay, 60=medium puff, 120=long-lived),',
+      '  "lifeMax": integer 0-200 (GAS ONLY: >= lifeMin),',
+      '  "colors": array of 3-6 hex strings like "#aabbcc", vivid and coherent, readable on near-black,',
+      '  "reactions": array of 0-3 objects, each { "other": "<existing-element-key>", "becomes": "<existing-element-key-or-empty>", "chance": number 0.005-0.25 }',
       '}',
       '',
-      'Kind meanings:',
-      '- "static": never moves (e.g. wall, plant, metal, ice).',
-      '- "powder": falls, piles; higher density sinks through lighter liquids (sand, gravel, salt, glitter).',
-      '- "liquid": falls + spreads sideways; denser liquid sinks below lighter one (water=5, oil=3).',
-      '- "gas": rises; if lifeMin>0 it decays (fire, smoke, steam).',
+      'Kind heuristics (use the description, not just the name):',
+      '- "static": never moves. wall, plant, ice, metal, crystal, wood, brick, glass, bone, web.',
+      '- "powder": falls, piles. sand, salt, dust, glitter, ash, gravel, sugar, snow, seed, gunpowder.',
+      '- "liquid": falls + spreads. water, oil, honey, acid, slime, juice, milk, blood, lava, mercury, syrup, tar, soda.',
+      '- "gas": rises. fire, smoke, steam, fog, mist, vapor, cloud, spores, plasma.',
+      '',
+      'Viscosity rules of thumb (LIQUID): water=0, gasoline=0.05, oil=0.3, blood=0.5, syrup=0.75, honey=0.9, tar=0.97. A "viscous" or "thick" or "slow" liquid MUST have viscosity >= 0.6. Do not return 0 viscosity for honey.',
+      'Flow rules of thumb (POWDER): flour/talc/dust=1.0, fine sand=0.7, sand=0.55, salt=0.5, gravel=0.25, chunky/jagged=0.1.',
+      'Stickiness: slime/glue/tar/web/resin = 0.7-0.95. Anything described as "sticky", "clinging", "gummy" gets >= 0.5.',
+      'Density: feathers=1, smoke=2, oil=3, alcohol=4, water=5, blood=6, mercury=8, lead=9. Match physical intuition.',
       '',
       'Reactions:',
-      '  "other" must be one of the EXISTING element keys: ' + otherList + '.',
-      '  "becomes" is also an existing key, OR the literal string "empty" to destroy the other cell.',
-      '  Reactions read as: "when this element is next to <other>, with <chance> per frame, <other> turns into <becomes>".',
-      '  Example: lava → [{"other":"plant","becomes":"fire","chance":0.15},{"other":"water","becomes":"empty","chance":0.1}].',
-      '  Keep chances small (0.01-0.15) so the sandbox stays legible.',
+      '  "other" must be one of the EXISTING element keys: ' + otherList + '. (You may also reference yourself by your own key in `becomes` — the system passes your name through validly.)',
+      '  "becomes" is also an existing key OR the literal string "empty" to destroy the other cell.',
+      '  Reads as: "when this element is next to <other>, with <chance> per frame, <other> turns into <becomes>".',
+      '  Examples:',
+      '    lava → [{"other":"plant","becomes":"fire","chance":0.15},{"other":"water","becomes":"empty","chance":0.1}]',
+      '    acid → [{"other":"plant","becomes":"empty","chance":0.12},{"other":"wall","becomes":"empty","chance":0.04}]',
+      '    snow → [{"other":"fire","becomes":"empty","chance":0.2}]  (snow extinguishes fire)',
+      '  Pick reactions that match the user\'s described behaviour. If the user says "dissolves walls", add {other:"wall",becomes:"empty",chance:0.05}.',
+      '  0-2 reactions is usually enough. Keep chances small (0.01-0.2) so the sandbox stays legible.',
       '',
-      'Guidelines:',
-      '- Pick a kind that matches the vibe of the name.',
-      '- Colors: 3-6 distinct hex values for visual texture, picked from a coherent palette.',
-      '- Ice/stone/wood/crystal/metal = static. Sand/salt/seed/glitter/powder = powder. Water/oil/acid/honey/lava = liquid. Smoke/fire/steam/fog = gas.',
-      '- Reactions should be tasteful: 0-2 reactions is fine; more than 3 feels chaotic.',
-      '- DO NOT invent new element keys in reactions — only reference existing ones.',
+      'Colors: 3-6 hex values from a coherent palette that READS on a near-black background. Honey = warm gold, tar = near-black with brown flecks, acid = vivid green, snow = warm whites and pale blues, fire = orange/yellow/red.',
       '',
       'Respond with ONLY the JSON object. No prose, no code fence.',
     ].join('\n');
 
     const userPrompt = desc
-      ? `Name: ${name}\nVibe: ${desc}`
+      ? `Name: ${name}\nDescription: ${desc}`
       : `Name: ${name}`;
 
     const body = {
       slug: SLUG,
-      model: 'gpt-5.4-mini',
-      temperature: 0.6,
-      max_tokens: 400,
+      // Best model — the user explicitly asked for it. Element design is a
+      // multi-knob reasoning task (kind + 4-5 numeric params + colors +
+      // reactions) where mini was producing generic specs.
+      model: 'gpt-5.4',
+      temperature: 0.7,
+      max_tokens: 600,
       response_format: 'json_object',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -860,18 +883,17 @@
     let kind = (raw && typeof raw.kind === 'string') ? raw.kind.toLowerCase() : 'powder';
     if (kinds.indexOf(kind) < 0) kind = 'powder';
 
-    let density = Math.round(Number(raw && raw.density));
+    let density = Number(raw && raw.density);
     if (!isFinite(density)) density = 5;
     density = Math.max(1, Math.min(9, density));
 
-    // Colors.
     let colorsArr = Array.isArray(raw && raw.colors) ? raw.colors.filter(isHex).slice(0, 6) : [];
     if (colorsArr.length < 3) colorsArr = fillFallbackColors(key);
 
-    // Reactions.
+    // Reactions — `becomes` may reference this new element by its own key.
     const validKeys = new Set(Object.keys(keyToId));
     validKeys.add(key);
-    let reactions = [];
+    const reactions = [];
     if (Array.isArray(raw && raw.reactions)) {
       for (const rx of raw.reactions.slice(0, 3)) {
         if (!rx || typeof rx !== 'object') continue;
@@ -886,22 +908,12 @@
         }
         let chance = Number(rx.chance);
         if (!isFinite(chance)) chance = 0.05;
-        chance = Math.max(0.005, Math.min(0.2, chance));
+        chance = Math.max(0.005, Math.min(0.25, chance));
         reactions.push({ other, becomes, chance });
       }
     }
 
-    // Life (gas only).
-    let lifeMin = 0, lifeMax = 0;
-    if (kind === 'gas') {
-      lifeMin = Math.max(0, Math.min(120, Math.round(Number(raw && raw.lifeMin))));
-      lifeMax = Math.max(0, Math.min(150, Math.round(Number(raw && raw.lifeMax))));
-      if (!isFinite(lifeMin)) lifeMin = 60;
-      if (!isFinite(lifeMax) || lifeMax < lifeMin) lifeMax = lifeMin + 40;
-      if (lifeMin === 0 && lifeMax === 0) { lifeMin = 60; lifeMax = 100; }
-    }
-
-    return {
+    const out = {
       id: nextCustomId(),
       key,
       displayName: displayName.slice(0, 14).toLowerCase(),
@@ -909,16 +921,43 @@
       density,
       colors: colorsArr,
       reactions,
-      lifeMin, lifeMax,
-      burns: false,
       isBuiltIn: false,
     };
+
+    if (kind === 'liquid') {
+      let visc = Number(raw && raw.viscosity);
+      if (!isFinite(visc)) visc = 0;
+      out.viscosity = Math.max(0, Math.min(1, visc));
+      let stick = Number(raw && raw.stickiness);
+      if (!isFinite(stick)) stick = 0;
+      out.stickiness = Math.max(0, Math.min(1, stick));
+    } else if (kind === 'powder') {
+      let flow = Number(raw && raw.flow);
+      if (!isFinite(flow)) flow = 0.55;
+      out.flow = Math.max(0.05, Math.min(1, flow));
+      let stick = Number(raw && raw.stickiness);
+      if (!isFinite(stick)) stick = 0;
+      out.stickiness = Math.max(0, Math.min(1, stick));
+    } else if (kind === 'gas') {
+      let buoy = Number(raw && raw.buoyancy);
+      if (!isFinite(buoy)) buoy = 0.9;
+      out.buoyancy = Math.max(0.05, Math.min(1, buoy));
+      let lifeMin = Math.round(Number(raw && raw.lifeMin));
+      let lifeMax = Math.round(Number(raw && raw.lifeMax));
+      if (!isFinite(lifeMin)) lifeMin = 60;
+      if (!isFinite(lifeMax) || lifeMax < lifeMin) lifeMax = lifeMin + 40;
+      lifeMin = Math.max(0, Math.min(150, lifeMin));
+      lifeMax = Math.max(0, Math.min(200, lifeMax));
+      if (lifeMin === 0 && lifeMax === 0) { lifeMin = 60; lifeMax = 100; }
+      out.lifeMin = lifeMin; out.lifeMax = lifeMax;
+    }
+
+    return out;
   }
 
   function isHex(s) { return typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s); }
 
   function fillFallbackColors(key) {
-    // Deterministic palette from the key so the swatch is stable on retries.
     let h = 0;
     for (let i = 0; i < key.length; i++) h = ((h * 31) + key.charCodeAt(i)) >>> 0;
     const hue = h % 360;
@@ -949,26 +988,46 @@
 
     let kind = 'powder';
     let density = 5;
+    let viscosity = 0;
+    let flow = 0.55;
+    let stickiness = 0;
+    let buoyancy = 0.9;
     let reactions = [];
-    if (has('fire', 'flame', 'lava', 'magma', 'burn', 'inferno')) {
-      kind = 'liquid'; density = 7;
+
+    if (has('fire', 'flame', 'inferno')) {
+      kind = 'gas'; density = 1; buoyancy = 1;
+      reactions = [];
+    } else if (has('lava', 'magma')) {
+      kind = 'liquid'; density = 7; viscosity = 0.6;
       reactions = [
-        { other: 'plant', becomes: 'fire', chance: 0.1 },
-        { other: 'oil',   becomes: 'fire', chance: 0.1 },
-        { other: 'water', becomes: null,    chance: 0.05 },
+        { other: 'water', becomes: null, chance: 0.05 },
       ];
-    } else if (has('smoke', 'steam', 'fog', 'mist', 'gas', 'vapor', 'cloud')) {
-      kind = 'gas';
-    } else if (has('ice', 'rock', 'stone', 'metal', 'crystal', 'wood', 'brick', 'glass', 'bone')) {
+    } else if (has('smoke', 'steam', 'fog', 'mist', 'gas', 'vapor', 'cloud', 'spore')) {
+      kind = 'gas'; density = 2; buoyancy = 0.6;
+    } else if (has('ice', 'rock', 'stone', 'metal', 'crystal', 'wood', 'brick', 'glass', 'bone', 'web')) {
       kind = 'static';
-    } else if (has('water', 'oil', 'honey', 'acid', 'slime', 'juice', 'milk', 'liquid', 'blood', 'goo')) {
-      kind = 'liquid'; density = 5;
-      if (has('acid')) reactions = [{ other: 'plant', becomes: null, chance: 0.08 }];
-    } else if (has('sand', 'salt', 'dust', 'glitter', 'seed', 'powder', 'ash', 'gravel', 'sugar', 'snow')) {
-      kind = 'powder';
+    } else if (has('honey', 'syrup', 'tar', 'glue', 'molasses', 'caramel')) {
+      kind = 'liquid'; density = 6; viscosity = 0.9; stickiness = 0.7;
+    } else if (has('acid')) {
+      kind = 'liquid'; density = 4; viscosity = 0.1;
+      reactions = [
+        { other: 'wall',  becomes: null, chance: 0.04 },
+        { other: 'sand',  becomes: null, chance: 0.04 },
+      ];
+    } else if (has('water', 'oil', 'slime', 'juice', 'milk', 'liquid', 'blood', 'goo', 'soda')) {
+      kind = 'liquid'; density = has('oil') ? 3 : 5; viscosity = has('oil') ? 0.3 : 0;
+      if (has('slime', 'goo')) { viscosity = 0.6; stickiness = 0.4; }
+    } else if (has('snow')) {
+      kind = 'powder'; density = 2; flow = 0.4;
+    } else if (has('flour', 'powder', 'dust', 'talc', 'ash')) {
+      kind = 'powder'; flow = 1.0; density = 2;
+    } else if (has('gravel', 'rocks')) {
+      kind = 'powder'; flow = 0.15; density = 7;
+    } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar')) {
+      kind = 'powder'; flow = 0.55;
     }
 
-    return {
+    const out = {
       id: nextCustomId(),
       key,
       displayName: displayName.slice(0, 14).toLowerCase(),
@@ -976,10 +1035,11 @@
       density,
       colors: fillFallbackColors(key),
       reactions,
-      lifeMin: kind === 'gas' ? 60 : 0,
-      lifeMax: kind === 'gas' ? 110 : 0,
-      burns: false,
       isBuiltIn: false,
     };
+    if (kind === 'liquid') { out.viscosity = viscosity; out.stickiness = stickiness; }
+    if (kind === 'powder') { out.flow = flow; out.stickiness = stickiness; }
+    if (kind === 'gas')    { out.buoyancy = buoyancy; out.lifeMin = 60; out.lifeMax = 110; }
+    return out;
   }
 })();

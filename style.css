@@ -21,9 +21,6 @@
   --mat-wall:  #d8c8a0;
   --mat-sand:  #e8a030;
   --mat-water: #4aa8d8;
-  --mat-oil:   #3a2e20;
-  --mat-fire:  #ff6020;
-  --mat-plant: #6ab040;
   --mat-erase: #808080;
 }
 
@@ -196,17 +193,11 @@ header h1 {
 .tool-btn.mat-wall  { --swatch: var(--mat-wall); }
 .tool-btn.mat-sand  { --swatch: var(--mat-sand); }
 .tool-btn.mat-water { --swatch: var(--mat-water); }
-.tool-btn.mat-oil   { --swatch: var(--mat-oil); }
-.tool-btn.mat-fire  { --swatch: var(--mat-fire); }
-.tool-btn.mat-plant { --swatch: var(--mat-plant); }
 .tool-btn.mat-erase { --swatch: var(--mat-erase); }
 
 .tool-btn.active.mat-wall  { background: var(--mat-wall);  color: #1a1714; border-color: var(--mat-wall);  font-weight: 700; }
 .tool-btn.active.mat-sand  { background: var(--mat-sand);  color: #1a1714; border-color: var(--mat-sand);  font-weight: 700; }
 .tool-btn.active.mat-water { background: var(--mat-water); color: #1a1714; border-color: var(--mat-water); font-weight: 700; }
-.tool-btn.active.mat-oil   { background: var(--mat-oil);   color: #f0e0c0; border-color: var(--mat-oil);   font-weight: 700; }
-.tool-btn.active.mat-fire  { background: var(--mat-fire);  color: #1a1714; border-color: var(--mat-fire);  font-weight: 700; }
-.tool-btn.active.mat-plant { background: var(--mat-plant); color: #1a1714; border-color: var(--mat-plant); font-weight: 700; }
 .tool-btn.active.mat-erase { background: var(--mat-erase); color: #1a1714; border-color: var(--mat-erase); font-weight: 700; }
 
 /* Custom elements use --swatch from inline style. */
@@ -381,6 +372,41 @@ header h1 {
 .invent-modal input:focus,
 .invent-modal textarea:focus {
   outline: none;
+  border-color: var(--amber);
+}
+
+.invent-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.invent-examples-label {
+  font-size: 0.66rem;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  margin-right: 4px;
+}
+
+.invent-example {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: lowercase;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.invent-example:hover {
+  color: var(--amber);
   border-color: var(--amber);
 }
 
