@@ -230,6 +230,75 @@ header h1 {
   font-weight: 700;
 }
 
+/* Per-element flag affordance — a tiny "⚑" glyph inside each invented
+   element tile. Clicking it opens a targeted feedback modal asking what's
+   wrong with THAT element (so the builder can fix it next iteration).
+   The flag also responds to long-press on the whole button for touch. */
+.tool-btn .flag-el {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  margin-right: -2px;
+  font-size: 0.72rem;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.55;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.tool-btn .flag-el:hover {
+  opacity: 1;
+  background: rgba(0,0,0,0.12);
+}
+.tool-btn.active .flag-el {
+  opacity: 0.8;
+}
+.tool-btn .flag-el::before {
+  content: '⚑';
+}
+
+/* Element-feedback modal: reuse the invent-modal shell but add chips row. */
+.elfb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+  margin-bottom: 2px;
+}
+.elfb-chip {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: lowercase;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.elfb-chip:hover {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.elfb-chip.selected {
+  background: var(--amber);
+  color: var(--bg);
+  border-color: var(--amber);
+}
+#elfb-name {
+  color: var(--amber);
+  font-weight: 700;
+}
+
 /* Invent button — amber outline, prominent, always visible. */
 .invent-btn {
   flex: 0 0 auto;

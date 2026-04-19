@@ -159,6 +159,7 @@
     showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
     syncActionLabel();
     bindModal();
+    bindElementFeedbackModal();
   });
 
   function resizeCanvas() {
@@ -224,9 +225,73 @@
     if (!spec.isBuiltIn) {
       btn.style.setProperty('--swatch', spec.colors[0] || '#e8a030');
     }
-    btn.textContent = spec.displayName.slice(0, 14);
-    btn.onclick = () => setMaterial(spec.key);
+
+    // Name label
+    const label = document.createElement('span');
+    label.textContent = spec.displayName.slice(0, 14);
+    btn.appendChild(label);
+
+    // Per-element flag — only on invented elements. The built-in seeds
+    // (wall/sand/water) aren't user-generated, so flagging them doesn't
+    // improve the AI-generated element quality the user is complaining
+    // about.
+    if (!spec.isBuiltIn) {
+      const flag = document.createElement('span');
+      flag.className = 'flag-el';
+      flag.setAttribute('role', 'button');
+      flag.setAttribute('aria-label', 'flag ' + spec.displayName);
+      flag.setAttribute('title', 'flag ' + spec.displayName + ' — tell the builder what is wrong');
+      flag.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        openElementFeedback(spec.key);
+      });
+      btn.appendChild(flag);
+
+      // Touch long-press on the whole tile opens the flag modal too —
+      // small tap targets on mobile make the flag glyph fiddly.
+      attachLongPress(btn, () => openElementFeedback(spec.key));
+    }
+
+    btn.addEventListener('click', (e) => {
+      // Ignore clicks that originated on the flag glyph (already handled).
+      if (e.target && e.target.classList && e.target.classList.contains('flag-el')) return;
+      setMaterial(spec.key);
+    });
     return btn;
+  }
+
+  // Long-press: fires after 650ms of a stationary touch. Used to open the
+  // element-flag modal without needing to hit the tiny flag glyph.
+  function attachLongPress(el, handler) {
+    let timer = null;
+    let startX = 0, startY = 0;
+    let fired = false;
+    const start = (e) => {
+      fired = false;
+      const t = (e.touches && e.touches[0]) || e;
+      startX = t.clientX; startY = t.clientY;
+      timer = setTimeout(() => {
+        fired = true;
+        handler();
+      }, 650);
+    };
+    const cancel = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    const move = (e) => {
+      if (!timer) return;
+      const t = (e.touches && e.touches[0]) || e;
+      const dx = Math.abs(t.clientX - startX), dy = Math.abs(t.clientY - startY);
+      if (dx > 8 || dy > 8) cancel();
+    };
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: true });
+    el.addEventListener('touchend', (e) => {
+      cancel();
+      if (fired && e.cancelable) e.preventDefault();
+    });
+    el.addEventListener('touchcancel', cancel);
   }
 
   function buildEraseButton() {
@@ -746,6 +811,129 @@
     });
   }
 
+  // ── Per-element feedback ───────────────────────────────────────────────────
+  // Users repeatedly said "elements don't behave how I'd expect". A generic
+  // feedback box can't tell the builder WHICH element broke, so we capture
+  // the element's full generated spec + the user's original description +
+  // a tagged reason. That goes to the same feedback endpoint as the global
+  // "Feedback" button, tagged as element_feedback so the builder can read
+  // structured per-element reports next cycle.
+  const FEEDBACK_ENDPOINT = 'https://5c99bazuj0.execute-api.us-east-1.amazonaws.com/feedback';
+  let elfbTargetKey = null;
+
+  function bindElementFeedbackModal() {
+    const overlay = document.getElementById('elfb-overlay');
+    if (!overlay) return;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeElementFeedback();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeElementFeedback();
+    });
+    document.getElementById('elfb-cancel').addEventListener('click', closeElementFeedback);
+    document.getElementById('elfb-submit').addEventListener('click', submitElementFeedback);
+    // Chips are multi-select — clicking toggles the .selected class; all
+    // selected reasons get concatenated into the payload.
+    document.querySelectorAll('#elfb-chips .elfb-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        chip.classList.toggle('selected');
+      });
+    });
+  }
+
+  function openElementFeedback(key) {
+    const id = keyToId[key];
+    if (!id) return;
+    const spec = registry[id];
+    if (!spec) return;
+    elfbTargetKey = key;
+    document.getElementById('elfb-name').textContent = spec.displayName;
+    document.querySelectorAll('#elfb-chips .elfb-chip').forEach(c => c.classList.remove('selected'));
+    document.getElementById('elfb-note').value = '';
+    setElfbStatus('', false);
+    document.getElementById('elfb-submit').disabled = false;
+    document.getElementById('elfb-submit').textContent = 'send';
+    document.getElementById('elfb-overlay').classList.remove('hidden');
+  }
+
+  function closeElementFeedback() {
+    document.getElementById('elfb-overlay').classList.add('hidden');
+    elfbTargetKey = null;
+  }
+
+  function setElfbStatus(msg, isErr) {
+    const el = document.getElementById('elfb-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('err', !!isErr);
+  }
+
+  function submitElementFeedback() {
+    if (!elfbTargetKey) { closeElementFeedback(); return; }
+    const id = keyToId[elfbTargetKey];
+    const spec = registry[id];
+    if (!spec) { closeElementFeedback(); return; }
+
+    const reasons = Array.from(document.querySelectorAll('#elfb-chips .elfb-chip.selected'))
+      .map(c => c.getAttribute('data-reason'))
+      .filter(Boolean);
+    const note = (document.getElementById('elfb-note').value || '').trim();
+    if (!reasons.length && !note) {
+      setElfbStatus('pick a reason or add a note.', true);
+      return;
+    }
+
+    // Build a structured text payload so the global feedback system
+    // (which only has a `text` field) still carries everything the
+    // builder needs to iterate. The `[element_feedback]` tag and JSON
+    // block make it trivial to parse in the next triage cycle.
+    const report = {
+      type: 'element_feedback',
+      element: {
+        displayName: spec.displayName,
+        key: spec.key,
+        userDesc: spec.userDesc || '',
+        kind: spec.kind,
+        density: spec.density,
+        viscosity: spec.viscosity,
+        flow: spec.flow,
+        stickiness: spec.stickiness,
+        buoyancy: spec.buoyancy,
+        lifeMin: spec.lifeMin,
+        lifeMax: spec.lifeMax,
+        colors: spec.colors,
+        reactions: spec.reactions,
+      },
+      reasons,
+      note,
+    };
+    const text = '[element_feedback] ' + spec.displayName
+      + (reasons.length ? ' — ' + reasons.join('; ') : '')
+      + (note ? ' — ' + note : '')
+      + '\n' + JSON.stringify(report);
+
+    const submitBtn = document.getElementById('elfb-submit');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'sending…';
+    setElfbStatus('', false);
+
+    fetch(FEEDBACK_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: SLUG, text }),
+    }).then(r => {
+      if (!r.ok) throw new Error('http_' + r.status);
+      return r.json();
+    }).then(() => {
+      setElfbStatus('thanks — the builder will see this next iteration.', false);
+      setTimeout(closeElementFeedback, 1200);
+    }).catch(() => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'retry';
+      setElfbStatus('send failed. try again?', true);
+    });
+  }
+
   window.openInvent = function () {
     const overlay = document.getElementById('invent-overlay');
     overlay.classList.remove('hidden');
@@ -998,6 +1186,9 @@
       colors: colorsArr,
       reactions,
       isBuiltIn: false,
+      // Keep the user's original description so per-element feedback can
+      // include "they asked for X but got Y" — makes iteration tractable.
+      userDesc: userDesc || '',
     };
 
     if (kind === 'liquid') {
@@ -1203,6 +1394,7 @@
       colors: colorsOverride || fillFallbackColors(key),
       reactions,
       isBuiltIn: false,
+      userDesc: desc || '',
     };
     if (kind === 'liquid') { out.viscosity = viscosity; out.stickiness = stickiness; }
     if (kind === 'powder') { out.flow = flow; out.stickiness = stickiness; }

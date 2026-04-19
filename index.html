@@ -45,7 +45,30 @@
       <div id="overlay-msg" class="hidden"></div>
     </div>
 
-    <p id="hint">paint with your finger. invent your own elements — describe the physics in plain words.</p>
+    <p id="hint">paint with your finger. invent your own elements — describe the physics in plain words. long-press any invented element to flag it.</p>
+  </div>
+
+  <!-- Element feedback modal -->
+  <div id="elfb-overlay" class="invent-overlay hidden" role="dialog" aria-labelledby="elfb-title">
+    <div class="invent-modal">
+      <h3 id="elfb-title">flag element</h3>
+      <p class="invent-hint" id="elfb-target">what's wrong with <strong id="elfb-name">this element</strong>? flagging it tells the builder what to fix.</p>
+      <div class="elfb-chips" id="elfb-chips" role="group" aria-label="quick reasons">
+        <button type="button" class="elfb-chip" data-reason="doesn't fall / flow correctly">doesn't fall right</button>
+        <button type="button" class="elfb-chip" data-reason="wrong color / invisible on background">wrong color</button>
+        <button type="button" class="elfb-chip" data-reason="doesn't react the way it should">wrong reactions</button>
+        <button type="button" class="elfb-chip" data-reason="should be a different kind (gas/liquid/powder/solid)">wrong kind</button>
+        <button type="button" class="elfb-chip" data-reason="too sticky / not sticky enough">stickiness off</button>
+        <button type="button" class="elfb-chip" data-reason="too thick / too runny">viscosity off</button>
+      </div>
+      <label for="elfb-note" class="invent-field-label">more detail <span class="invent-optional">(optional)</span></label>
+      <textarea id="elfb-note" maxlength="500" placeholder="e.g. 'honey should stick to walls and barely flow, but it ran like water'"></textarea>
+      <p id="elfb-status" class="invent-status"></p>
+      <div class="invent-row">
+        <button type="button" id="elfb-cancel">cancel</button>
+        <button type="button" id="elfb-submit" class="primary">send</button>
+      </div>
+    </div>
   </div>
 
   <!-- Invent modal -->
