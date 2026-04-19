@@ -19,7 +19,7 @@
   <div id="app">
     <header>
       <h1>gravity doodle</h1>
-      <p id="tagline">draw a shape — then hit drop</p>
+      <p id="tagline">draw, drop, keep drawing as it falls</p>
     </header>
 
     <div id="controls">
@@ -36,8 +36,13 @@
         </div>
       </div>
 
-      <!-- PHYSICS PHASE: pour more / reset / share -->
+      <!-- PHYSICS PHASE: draw/erase during flow / pour more / reset / share -->
       <div id="physics-controls" class="hidden">
+        <div id="phys-tool-row" role="group" aria-label="edit while sand flows">
+          <span id="phys-tool-label">edit live:</span>
+          <button id="btn-draw-phys" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
+          <button id="btn-erase-phys" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
+        </div>
         <div id="physics-row">
           <button id="btn-pour" class="phys-btn" onclick="startDrop()">pour more</button>
           <button id="btn-reset" class="phys-btn reset-btn" onclick="clearAll()">reset</button>

@@ -7,17 +7,28 @@
   const WALL  = 1;
   const SAND  = 2;
 
-  // Warm palette: each sand particle picks one of these on spawn
-  const SAND_COLORS = [
-    '#e8a030', // amber
-    '#e06020', // burnt orange
-    '#d44010', // terracotta
-    '#f0c048', // gold
-    '#c83030', // deep red
-    '#e87828', // coral-orange
-    '#f0d060', // pale gold
-    '#b84020', // brick
+  // Multiple palettes — each pour rotates to a new scheme so sculptures
+  // accumulate bands of different colour families.
+  const SAND_PALETTES = [
+    // 0: warm amber / orange / red (original)
+    ['#e8a030', '#e06020', '#d44010', '#f0c048', '#c83030', '#e87828', '#f0d060', '#b84020'],
+    // 1: cool ocean — teal / blue / cyan
+    ['#3ec7d0', '#2e8cc8', '#1d5aa8', '#6ee0d8', '#20b2aa', '#4aa0d8', '#b0e8e0', '#0d4b78'],
+    // 2: forest — greens / olive / moss
+    ['#7cb850', '#4a8028', '#2e5a18', '#b8d870', '#6a9838', '#a0c060', '#d8e890', '#345010'],
+    // 3: neon candy — hot pink / magenta / purple
+    ['#ff4da6', '#ff80c0', '#c830a0', '#ffb0dc', '#d850b8', '#9040b0', '#ff60d0', '#6820a0'],
+    // 4: monochrome grayscale
+    ['#f0f0f0', '#c8c8c8', '#989898', '#707070', '#505050', '#e0e0e0', '#b0b0b0', '#383838'],
+    // 5: pastel rainbow
+    ['#ffb0b0', '#ffd8a0', '#fff0a0', '#b0e8b0', '#b0d8ff', '#d8b0ff', '#ffc0e8', '#a0f0d8'],
+    // 6: electric — lime / cyan / magenta
+    ['#c8ff00', '#00ffd0', '#ff00c8', '#60ff40', '#30e8e8', '#f040ff', '#a0ff80', '#ff80ff'],
+    // 7: earth — browns / tans / ochre
+    ['#8c5a28', '#b07840', '#d89860', '#5a3818', '#a06838', '#c89068', '#e8b880', '#3c2410'],
   ];
+  let paletteIndex = 0; // which palette is active for the current pour
+  let SAND_COLORS = SAND_PALETTES[paletteIndex];
 
   // ── State ──────────────────────────────────────────────────────────────────
   let canvas, ctx;
@@ -116,12 +127,16 @@
       b.classList.remove('active');
       if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', 'false');
     });
-    // 'pen' button id is btn-draw (mode is 'draw'); erase maps directly.
-    const activeBtn = document.getElementById('btn-' + m);
-    if (activeBtn) {
-      activeBtn.classList.add('active');
-      if (activeBtn.hasAttribute('aria-pressed')) activeBtn.setAttribute('aria-pressed', 'true');
-    }
+    // Activate BOTH the draw-phase and physics-phase tool button for this mode,
+    // so the toggle stays in sync across phases.
+    const ids = ['btn-' + m, 'btn-' + m + '-phys'];
+    ids.forEach(id => {
+      const activeBtn = document.getElementById(id);
+      if (activeBtn) {
+        activeBtn.classList.add('active');
+        if (activeBtn.hasAttribute('aria-pressed')) activeBtn.setAttribute('aria-pressed', 'true');
+      }
+    });
   };
 
   window.clearAll = function () {
@@ -175,6 +190,11 @@
         if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
         const i = idx(nc, nr);
         if (useMode === 'draw') {
+          // While sand is flowing, don't overwrite existing sand — let it
+          // keep falling. Only convert empty cells (and existing walls) into
+          // wall. This way pen strokes during physics create new obstacles
+          // without deleting mid-flight particles.
+          if (dropping && grid[i] === SAND) continue;
           grid[i]   = WALL;
           colors[i] = null;
         } else if (useMode === 'erase') {
@@ -201,24 +221,27 @@
   }
 
   function onPointerDown(e) {
-    if (dropping) return;
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     isPointerDown = true;
     const cell = canvasCell(e);
     lastCell = cell;
 
-    // Start a new stroke (in virtual coords)
-    currentStroke = { m: mode === 'erase' ? 'e' : 'd', pts: [gridToVirtual(cell.c, cell.r)] };
+    // Only record strokes for sharing during the draw phase — mid-physics
+    // edits are ephemeral and shouldn't be encoded into the share URL.
+    if (!dropping) {
+      currentStroke = { m: mode === 'erase' ? 'e' : 'd', pts: [gridToVirtual(cell.c, cell.r)] };
+    }
 
     paintAt(cell.c, cell.r, 2);
     hasDrawn = true;
     hideOverlay();
-    render();
+    if (!dropping) render();
+    // While dropping, the animation loop re-renders every frame — no need here.
   }
 
   function onPointerMove(e) {
-    if (!isPointerDown || dropping) return;
+    if (!isPointerDown) return;
     e.preventDefault();
     const cell = canvasCell(e);
     if (lastCell) {
@@ -233,7 +256,7 @@
       }
     }
     lastCell = cell;
-    render();
+    if (!dropping) render();
   }
 
   function onPointerUp(e) {
@@ -272,7 +295,7 @@
       return;
     }
     if (dropping) {
-      // Already pouring: trigger another wave from the top.
+      // Already pouring: trigger another wave from the top with a NEW palette.
       refillSand();
       return;
     }
@@ -280,6 +303,9 @@
     dropping = true;
     dropFrame = 0;
     setPhase('physics');
+
+    // First pour uses a random palette so each session feels fresh.
+    rotatePalette(true);
 
     // Show loading micro-copy briefly
     showOverlay('watching gravity\ndo its thing...');
@@ -289,8 +315,27 @@
   };
 
   // Reset the spawn clock so another wave of sand pours from the top.
+  // Each re-pour shifts to a new palette so bands stack up in different hues.
   function refillSand() {
     dropFrame = 0;
+    rotatePalette(false);
+  }
+
+  // Swap to a new palette. On first call we pick randomly; subsequent calls
+  // pick any palette other than the current one so colour actually changes.
+  function rotatePalette(firstPour) {
+    if (firstPour) {
+      paletteIndex = Math.floor(Math.random() * SAND_PALETTES.length);
+    } else {
+      let next = paletteIndex;
+      while (next === paletteIndex && SAND_PALETTES.length > 1) {
+        next = Math.floor(Math.random() * SAND_PALETTES.length);
+      }
+      paletteIndex = next;
+    }
+    SAND_COLORS = SAND_PALETTES[paletteIndex];
+    // Reset the streak offset so the new palette starts from its first band.
+    paletteOffset = 0;
   }
 
   // ── Sand Simulation ────────────────────────────────────────────────────────

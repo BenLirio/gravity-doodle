@@ -213,6 +213,21 @@ header h1 {
 
 /* ── Physics phase controls ─────────────────────────────────────────────── */
 
+#phys-tool-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+}
+
+#phys-tool-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  margin-right: 4px;
+  text-transform: lowercase;
+}
+
 #physics-row {
   display: flex;
   gap: 8px;
