@@ -1110,31 +1110,105 @@
   // world kind, the LLM occasionally miscategorises it. These rules are a
   // final safety net so "fire" always rises and "wall" never falls, no
   // matter what the model said. Only fires for unambiguous names.
+  //
+  // CRITICAL: we must check the KEY (element name) first, not the full
+  // key+description blob. Example descriptions describe *interactions*
+  // ("snow … melts on contact with fire", "acid … eats through walls",
+  // "lava … hardens water into steam") — if we pattern-match those reaction
+  // words as kind hints we get wildly wrong results (snow flagged as gas
+  // because its desc mentions fire, acid flagged as static because its desc
+  // mentions walls, lava flagged as gas because its desc mentions steam).
+  // Previous bug: blob-match produced a gas for lava and snow, and a static
+  // for acid. Three separate user reports. Fix: name-first, desc only as a
+  // weak fallback for elements whose *name itself* contains one of the
+  // category words.
   function kindOverrideFromName(key, desc) {
-    const blob = (key + ' ' + (desc || '')).toLowerCase();
-    const any = (...words) => words.some(w => blob.indexOf(w) >= 0);
-    // Gas — hot/bright/airborne things MUST rise.
-    if (any('fire', 'flame', 'inferno', 'ember', 'plasma', 'lightning')) return 'gas';
-    if (any('smoke', 'steam', 'vapor', 'mist', 'fog', 'cloud')) return 'gas';
-    // Static — solid things don't move.
-    if (any('wall', 'brick', 'concrete', 'bedrock')) return 'static';
-    if (any('wood', 'timber', 'log', 'bark')) return 'static';
-    if (any('metal', 'iron', 'steel', 'copper', 'brass')) return 'static';
-    if (any('ice', 'icicle', 'glacier')) return 'static';
-    if (any('plant', 'leaf', 'vine', 'tree', 'grass', 'moss')) return 'static';
-    if (any('glass', 'crystal', 'gem', 'diamond')) return 'static';
-    // Liquid — obvious fluids.
-    if (any('lava', 'magma')) return 'liquid';
-    if (any('water', 'ocean', 'river')) return 'liquid';
-    if (any('oil', 'gasoline', 'petrol')) return 'liquid';
-    if (any('acid', 'poison')) return 'liquid';
-    if (any('honey', 'syrup', 'molasses', 'caramel', 'tar')) return 'liquid';
-    if (any('blood', 'slime', 'goo', 'ooze')) return 'liquid';
-    if (any('juice', 'milk', 'wine', 'soda', 'ink', 'paint')) return 'liquid';
-    // Powder — granular.
-    if (any('sand', 'salt', 'sugar', 'flour', 'dust', 'talc')) return 'powder';
-    if (any('ash', 'soot', 'cinder', 'glitter', 'gravel')) return 'powder';
-    if (any('snow', 'seed', 'gunpowder', 'confetti')) return 'powder';
+    // Whole-word matcher against a single string. Uses word boundaries so
+    // "water" doesn't match "underwater cave" descriptions unexpectedly, and
+    // more importantly so reaction verbs like "melts" don't match "melt".
+    function hitsWord(str, words) {
+      for (const w of words) {
+        const re = new RegExp('(^|[^a-z0-9])' + w + '([^a-z0-9]|$)', 'i');
+        if (re.test(str)) return true;
+      }
+      return false;
+    }
+
+    const name = (key || '').toLowerCase();
+
+    // Pass 1 — match against the element NAME only. This is the strongest
+    // signal: if the user types "acid", the thing is a liquid, period, no
+    // matter what their free-text description says about it.
+    // Order matters: gas first (airborne stuff must rise), then static,
+    // then liquid, then powder.
+    if (hitsWord(name, ['fire', 'flame', 'inferno', 'ember', 'plasma', 'lightning', 'spark'])) return 'gas';
+    if (hitsWord(name, ['smoke', 'steam', 'vapor', 'mist', 'fog', 'cloud', 'haze'])) return 'gas';
+
+    if (hitsWord(name, ['wall', 'brick', 'concrete', 'bedrock', 'stone', 'rock'])) return 'static';
+    if (hitsWord(name, ['wood', 'timber', 'log', 'bark'])) return 'static';
+    if (hitsWord(name, ['metal', 'iron', 'steel', 'copper', 'brass', 'gold', 'silver'])) return 'static';
+    if (hitsWord(name, ['ice', 'icicle', 'glacier'])) return 'static';
+    if (hitsWord(name, ['plant', 'leaf', 'vine', 'tree', 'grass', 'moss'])) return 'static';
+    if (hitsWord(name, ['glass', 'crystal', 'gem', 'diamond'])) return 'static';
+
+    if (hitsWord(name, ['lava', 'magma'])) return 'liquid';
+    if (hitsWord(name, ['water', 'ocean', 'river'])) return 'liquid';
+    if (hitsWord(name, ['oil', 'gasoline', 'petrol', 'fuel'])) return 'liquid';
+    if (hitsWord(name, ['acid', 'poison'])) return 'liquid';
+    if (hitsWord(name, ['honey', 'syrup', 'molasses', 'caramel', 'tar'])) return 'liquid';
+    if (hitsWord(name, ['blood', 'slime', 'goo', 'ooze'])) return 'liquid';
+    if (hitsWord(name, ['juice', 'milk', 'wine', 'soda', 'ink', 'paint'])) return 'liquid';
+
+    if (hitsWord(name, ['sand', 'salt', 'sugar', 'flour', 'dust', 'talc'])) return 'powder';
+    if (hitsWord(name, ['ash', 'soot', 'cinder', 'glitter', 'gravel'])) return 'powder';
+    if (hitsWord(name, ['snow', 'seed', 'gunpowder', 'confetti'])) return 'powder';
+
+    // Pass 2 — fall back to description ONLY if the name itself didn't
+    // give us anything. This catches e.g. user types "whoosh" with desc
+    // "a rising burst of fire" → gas. We don't trust desc matches that
+    // could be reaction language ("eats through walls", "melts fire")
+    // enough to override the name, but if there's no name signal at all
+    // it's better than nothing.
+    const d = (desc || '').toLowerCase();
+    if (!d) return null;
+    if (hitsWord(d, ['fire', 'flame', 'inferno', 'ember', 'plasma'])) return 'gas';
+    if (hitsWord(d, ['smoke', 'steam', 'vapor', 'fog'])) return 'gas';
+    return null;
+  }
+
+  // Canonical numeric hints per name — used by `finalizeSpec` when the LLM
+  // returned numbers keyed to the wrong kind (e.g. it thought lava was a
+  // gas and gave us gas-only buoyancy/lifeMin values instead of viscosity).
+  // Returns null when the name is too generic to hint. Mirrors the
+  // per-name branches in `fallbackSpec` so behaviour stays consistent.
+  function namePropertyHints(key) {
+    const n = (key || '').toLowerCase();
+    const has = (...words) => words.some(w => n.indexOf(w) >= 0);
+    if (has('fire', 'flame', 'inferno', 'ember', 'plasma', 'spark', 'lightning')) {
+      return { density: 1, buoyancy: 1, lifeMin: 30, lifeMax: 70 };
+    }
+    if (has('lava', 'magma'))          return { density: 8, viscosity: 0.8, stickiness: 0 };
+    if (has('steam'))                  return { density: 2, buoyancy: 0.8, lifeMin: 30, lifeMax: 60 };
+    if (has('smoke'))                  return { density: 2, buoyancy: 0.6, lifeMin: 60, lifeMax: 120 };
+    if (has('fog', 'mist', 'vapor', 'cloud', 'haze')) return { density: 2, buoyancy: 0.5, lifeMin: 60, lifeMax: 120 };
+    if (has('honey', 'syrup', 'molasses', 'caramel')) return { density: 6, viscosity: 0.9, stickiness: 0.7 };
+    if (has('tar', 'pitch', 'glue', 'resin')) return { density: 6, viscosity: 0.95, stickiness: 0.85 };
+    if (has('acid'))                   return { density: 4, viscosity: 0.1, stickiness: 0 };
+    if (has('oil', 'gasoline', 'petrol', 'fuel')) return { density: 3, viscosity: 0.3, stickiness: 0 };
+    if (has('water', 'juice', 'milk', 'wine', 'soda')) return { density: 5, viscosity: 0, stickiness: 0 };
+    if (has('slime', 'goo', 'ooze'))   return { density: 5, viscosity: 0.6, stickiness: 0.5 };
+    if (has('blood'))                  return { density: 6, viscosity: 0.4, stickiness: 0 };
+    if (has('ink', 'paint'))           return { density: 5, viscosity: 0.2, stickiness: 0 };
+    if (has('snow'))                   return { density: 2, flow: 0.4, stickiness: 0 };
+    if (has('flour', 'dust', 'talc', 'powder')) return { density: 2, flow: 1.0, stickiness: 0 };
+    if (has('ash', 'soot', 'cinder'))  return { density: 2, flow: 0.9, stickiness: 0 };
+    if (has('gravel', 'pebbles', 'rocks')) return { density: 7, flow: 0.15, stickiness: 0 };
+    if (has('gunpowder'))              return { density: 4, flow: 0.6, stickiness: 0 };
+    if (has('salt', 'sugar', 'seed', 'rice', 'glitter', 'confetti', 'sand')) return { density: 4, flow: 0.55, stickiness: 0 };
+    if (has('wood', 'timber', 'log', 'bark')) return { density: 4 };
+    if (has('metal', 'iron', 'steel', 'copper', 'brass', 'gold', 'silver')) return { density: 8 };
+    if (has('ice', 'icicle'))          return { density: 5 };
+    if (has('plant', 'leaf', 'vine', 'tree', 'grass', 'moss')) return { density: 3 };
     return null;
   }
 
@@ -1145,10 +1219,20 @@
     if (kinds.indexOf(kind) < 0) kind = 'powder';
     // Hard override for names with unambiguous real-world kinds.
     const override = kindOverrideFromName(key, userDesc);
+    const kindWasOverridden = !!(override && override !== kind);
     if (override) kind = override;
+    // Name-based property hints — used when the LLM either got the kind
+    // wrong (so its density/viscosity/flow numbers were picked for the
+    // wrong category) or omitted the per-kind knob entirely. We map the
+    // canonical names to plausible defaults that `finalizeSpec` can
+    // merge in below. Same table as `fallbackSpec`, kept in sync.
+    const hint = namePropertyHints(key);
 
     let density = Number(raw && raw.density);
-    if (!isFinite(density)) density = 5;
+    if (!isFinite(density)) density = (hint && isFinite(hint.density)) ? hint.density : 5;
+    // If we overrode the kind, the LLM's density was picked for the wrong
+    // kind — prefer our canonical default if we have one.
+    if (kindWasOverridden && hint && isFinite(hint.density)) density = hint.density;
     density = Math.max(1, Math.min(9, density));
 
     let colorsArr = Array.isArray(raw && raw.colors) ? raw.colors.filter(isHex).slice(0, 6) : [];
@@ -1191,28 +1275,39 @@
       userDesc: userDesc || '',
     };
 
+    // When we overrode the kind, the raw per-kind knobs belong to the
+    // original (wrong) kind and shouldn't be trusted. Prefer name-based
+    // hints in that case.
+    const preferHint = kindWasOverridden && hint;
     if (kind === 'liquid') {
       let visc = Number(raw && raw.viscosity);
-      if (!isFinite(visc)) visc = 0;
+      if (preferHint && isFinite(hint.viscosity)) visc = hint.viscosity;
+      else if (!isFinite(visc)) visc = (hint && isFinite(hint.viscosity)) ? hint.viscosity : 0;
       out.viscosity = Math.max(0, Math.min(1, visc));
       let stick = Number(raw && raw.stickiness);
-      if (!isFinite(stick)) stick = 0;
+      if (preferHint && isFinite(hint.stickiness)) stick = hint.stickiness;
+      else if (!isFinite(stick)) stick = (hint && isFinite(hint.stickiness)) ? hint.stickiness : 0;
       out.stickiness = Math.max(0, Math.min(1, stick));
     } else if (kind === 'powder') {
       let flow = Number(raw && raw.flow);
-      if (!isFinite(flow)) flow = 0.55;
+      if (preferHint && isFinite(hint.flow)) flow = hint.flow;
+      else if (!isFinite(flow)) flow = (hint && isFinite(hint.flow)) ? hint.flow : 0.55;
       out.flow = Math.max(0.05, Math.min(1, flow));
       let stick = Number(raw && raw.stickiness);
-      if (!isFinite(stick)) stick = 0;
+      if (preferHint && isFinite(hint.stickiness)) stick = hint.stickiness;
+      else if (!isFinite(stick)) stick = (hint && isFinite(hint.stickiness)) ? hint.stickiness : 0;
       out.stickiness = Math.max(0, Math.min(1, stick));
     } else if (kind === 'gas') {
       let buoy = Number(raw && raw.buoyancy);
-      if (!isFinite(buoy)) buoy = 0.9;
+      if (preferHint && isFinite(hint.buoyancy)) buoy = hint.buoyancy;
+      else if (!isFinite(buoy)) buoy = (hint && isFinite(hint.buoyancy)) ? hint.buoyancy : 0.9;
       out.buoyancy = Math.max(0.05, Math.min(1, buoy));
       let lifeMin = Math.round(Number(raw && raw.lifeMin));
       let lifeMax = Math.round(Number(raw && raw.lifeMax));
-      if (!isFinite(lifeMin)) lifeMin = 60;
-      if (!isFinite(lifeMax) || lifeMax < lifeMin) lifeMax = lifeMin + 40;
+      if (preferHint && isFinite(hint.lifeMin)) lifeMin = hint.lifeMin;
+      else if (!isFinite(lifeMin)) lifeMin = (hint && isFinite(hint.lifeMin)) ? hint.lifeMin : 60;
+      if (preferHint && isFinite(hint.lifeMax)) lifeMax = hint.lifeMax;
+      else if (!isFinite(lifeMax) || lifeMax < lifeMin) lifeMax = lifeMin + 40;
       lifeMin = Math.max(0, Math.min(150, lifeMin));
       lifeMax = Math.max(0, Math.min(200, lifeMax));
       if (lifeMin === 0 && lifeMax === 0) { lifeMin = 60; lifeMax = 100; }
