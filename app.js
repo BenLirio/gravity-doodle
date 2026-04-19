@@ -79,6 +79,7 @@
     canvas = document.getElementById('main-canvas');
     ctx = canvas.getContext('2d');
 
+    pickSessionSandPalette();
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
@@ -159,10 +160,17 @@
     syncPourButtonLabel();
   };
 
+  // Static materials (wall, plant) and erase can't be poured — fall back to
+  // sand so the pour button always does something sensible.
+  const POURABLE = { sand: true, water: true, oil: true, fire: true };
+  function pourMaterialFor(m) {
+    return POURABLE[m] ? m : 'sand';
+  }
+
   function syncPourButtonLabel() {
     const drop = document.getElementById('btn-drop');
     const pour = document.getElementById('btn-pour');
-    const label = (material === 'erase') ? 'pour sand' : 'pour ' + material;
+    const label = 'pour ' + pourMaterialFor(material);
     if (drop) drop.textContent = label;
     if (pour) pour.textContent = label;
   }
@@ -173,10 +181,12 @@
     hasDrawn = false;
     strokes = [];
     currentStroke = null;
+    pours = [];
     if (location.hash) {
       history.replaceState(null, '', location.pathname + location.search);
     }
     initGrid();
+    pickSessionSandPalette();
     setPhase('draw');
     setMaterial('wall');
     showOverlay('paint materials here\nwith your finger or mouse\n\ntry walls + water + fire');
@@ -323,9 +333,10 @@
 
   // ── Pour ───────────────────────────────────────────────────────────────────
   window.startDrop = function () {
-    // Pour the currently selected material. "erase" pours sand as a friendly
-    // default (you can't pour "erase" meaningfully).
-    const mat = (material === 'erase') ? 'sand' : material;
+    // Pour the currently selected material. Static materials (wall, plant) and
+    // erase can't be poured meaningfully — fall back to sand so the action is
+    // always sensible.
+    const mat = pourMaterialFor(material);
 
     if (!dropping) {
       dropping = true;
@@ -343,7 +354,6 @@
   let pours = []; // { mat: 'sand'|..., type: SAND|..., frames: 0, total: 300 }
 
   function beginPour(mat) {
-    if (mat === 'sand') rotatePalette(pours.length === 0);
     pours.push({
       mat: mat,
       type: MATERIAL_TYPE[mat],
@@ -352,16 +362,11 @@
     });
   }
 
-  function rotatePalette(firstPour) {
-    if (firstPour) {
-      paletteIndex = Math.floor(Math.random() * SAND_PALETTES.length);
-    } else {
-      let next = paletteIndex;
-      while (next === paletteIndex && SAND_PALETTES.length > 1) {
-        next = Math.floor(Math.random() * SAND_PALETTES.length);
-      }
-      paletteIndex = next;
-    }
+  // Pick a single sand palette per session so pours stay color-consistent.
+  // Called once at startup and again on clearAll. We deliberately do NOT
+  // rotate between pours — users found the rotating colours confusing.
+  function pickSessionSandPalette() {
+    paletteIndex = Math.floor(Math.random() * SAND_PALETTES.length);
     SAND_COLORS = SAND_PALETTES[paletteIndex];
     paletteOffset = 0;
   }
@@ -575,8 +580,8 @@
       const below = idx(c, r + 1);
       const bt = grid[below];
       if (bt === EMPTY) { swap(i, below); flags[below] |= 1; return; }
-      // Oil is lighter than water — float (swap) upward through water.
-      if (mat === OIL && bt === WATER) { swap(i, below); flags[below] |= 1; return; }
+      // Water is denser than oil — water sinks down through oil (oil floats).
+      if (mat === WATER && bt === OIL) { swap(i, below); flags[below] |= 1; return; }
       // Diagonal settle
       const goLeft = Math.random() < 0.5;
       const d1 = goLeft ? -1 : 1, d2 = -d1;
@@ -597,7 +602,7 @@
     const ni = idx(nc, r + 1);
     const nt = grid[ni];
     if (nt === EMPTY) { swap(idx(c, r), ni); flags[ni] |= 1; return true; }
-    if (mat === OIL && nt === WATER) { swap(idx(c, r), ni); flags[ni] |= 1; return true; }
+    if (mat === WATER && nt === OIL) { swap(idx(c, r), ni); flags[ni] |= 1; return true; }
     return false;
   }
 
