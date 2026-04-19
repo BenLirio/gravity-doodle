@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gravity Doodle</title>
   <meta property="og:title" content="Gravity Doodle">
-  <meta property="og:description" content="Draw any shape, then drop hundreds of sand particles and watch them pile into your sculpture.">
+  <meta property="og:description" content="Draw any shape, then drop hundreds of sand particles and watch them pour through your sculpture.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://benlirio.com/gravity-doodle/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,25 +23,35 @@
     </header>
 
     <div id="controls">
-      <div id="action-row">
-        <button id="btn-drop" onclick="startDrop()">drop the sand</button>
+      <!-- DRAW PHASE: pen / erase / clear / drop -->
+      <div id="draw-controls">
+        <div id="tool-row" role="group" aria-label="drawing tool">
+          <span id="tool-label">tool:</span>
+          <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
+          <button id="btn-erase" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
+          <button id="btn-clear" class="tool-btn clear-btn" onclick="clearAll()">clear</button>
+        </div>
+        <div id="action-row">
+          <button id="btn-drop" onclick="startDrop()">drop the sand</button>
+        </div>
       </div>
-      <div id="tool-row" role="group" aria-label="drawing tool">
-        <span id="tool-label">tool:</span>
-        <button id="btn-draw" class="tool-btn active" onclick="setMode('draw')" aria-pressed="true">pen</button>
-        <button id="btn-erase" class="tool-btn" onclick="setMode('erase')" aria-pressed="false">erase</button>
-        <button id="btn-clear" class="tool-btn clear-btn" onclick="clearAll()">clear</button>
+
+      <!-- PHYSICS PHASE: pour more / reset / share -->
+      <div id="physics-controls" class="hidden">
+        <div id="physics-row">
+          <button id="btn-pour" class="phys-btn" onclick="startDrop()">pour more</button>
+          <button id="btn-reset" class="phys-btn reset-btn" onclick="clearAll()">reset</button>
+        </div>
+        <div id="share-row">
+          <button id="btn-share" onclick="shareSculpture()">share this sculpture</button>
+        </div>
+        <p id="share-status" class="share-status"></p>
       </div>
     </div>
 
     <div id="canvas-wrap">
       <canvas id="main-canvas"></canvas>
       <div id="overlay-msg" class="hidden"></div>
-    </div>
-
-    <div id="share" style="display:none">
-      <p id="settle-msg">your shape lives in sand now</p>
-      <button onclick="saveSculpture()">save my sculpture</button>
     </div>
   </div>
 </body>

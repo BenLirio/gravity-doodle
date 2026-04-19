@@ -31,7 +31,15 @@
   let dropFrame = 0;
   let animId = null;
   let hasDrawn = false;
-  let settleTimer = null;
+
+  // Stroke recording for shareable URL.
+  // strokes = list of strokes; each stroke = { m: 'd'|'e', pts: [[c,r],[c,r],...] }
+  let strokes = [];
+  let currentStroke = null;
+  // Logical coordinate space (independent of viewport): we record at a fixed
+  // virtual resolution so the drawing reproduces faithfully on any device.
+  const VCOLS = 200;
+  const VROWS = 267; // matches 3:4 aspect
 
   // ── Init ───────────────────────────────────────────────────────────────────
   window.addEventListener('DOMContentLoaded', () => {
@@ -48,7 +56,11 @@
     canvas.addEventListener('pointerup',   onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
 
-    showOverlay('draw any shape here\nwith your finger or mouse\n\nthen tap DROP');
+    // If a sculpture is encoded in the URL, replay it; otherwise show prompt.
+    const loaded = tryLoadFromHash();
+    if (!loaded) {
+      showOverlay('draw any shape here\nwith your finger or mouse\n\nthen tap DROP');
+    }
     render();
   });
 
@@ -61,6 +73,8 @@
     COLS = Math.floor(w / CELL);
     ROWS = Math.floor(h / CELL);
     initGrid();
+    // Replay strokes onto the new grid so resize/orientation doesn't wipe them.
+    replayStrokes();
   }
 
   function initGrid() {
@@ -78,6 +92,21 @@
   }
   function hideOverlay() {
     document.getElementById('overlay-msg').classList.add('hidden');
+  }
+
+  // ── Phase / UI ─────────────────────────────────────────────────────────────
+  function setPhase(phase) {
+    const drawC = document.getElementById('draw-controls');
+    const physC = document.getElementById('physics-controls');
+    if (phase === 'physics') {
+      drawC.classList.add('hidden');
+      physC.classList.remove('hidden');
+    } else {
+      drawC.classList.remove('hidden');
+      physC.classList.add('hidden');
+      const status = document.getElementById('share-status');
+      if (status) status.textContent = '';
+    }
   }
 
   // ── Mode ───────────────────────────────────────────────────────────────────
@@ -100,12 +129,15 @@
     dropping = false;
     dropFrame = 0;
     hasDrawn = false;
-    if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
-    document.getElementById('share').style.display = 'none';
-    const dropBtn = document.getElementById('btn-drop');
-    dropBtn.disabled = false;
-    dropBtn.textContent = 'drop the sand';
+    strokes = [];
+    currentStroke = null;
+    // Drop the URL hash so a reset is a clean slate.
+    if (location.hash) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
     initGrid();
+    setPhase('draw');
+    setMode('draw');
     showOverlay('draw any shape here\nwith your finger or mouse\n\nthen tap DROP');
     render();
   };
@@ -120,17 +152,32 @@
     return { c, r };
   }
 
-  function paintAt(c, r, brushR) {
+  // Convert grid cell <-> virtual coordinate so strokes survive resize/share.
+  function gridToVirtual(c, r) {
+    return [
+      Math.round((c / Math.max(1, COLS - 1)) * (VCOLS - 1)),
+      Math.round((r / Math.max(1, ROWS - 1)) * (VROWS - 1)),
+    ];
+  }
+  function virtualToGrid(vc, vr) {
+    return {
+      c: Math.round((vc / (VCOLS - 1)) * (COLS - 1)),
+      r: Math.round((vr / (VROWS - 1)) * (ROWS - 1)),
+    };
+  }
+
+  function paintAt(c, r, brushR, m) {
+    const useMode = m || mode;
     for (let dc = -brushR; dc <= brushR; dc++) {
       for (let dr = -brushR; dr <= brushR; dr++) {
         if (dc * dc + dr * dr > brushR * brushR) continue;
         const nc = c + dc, nr = r + dr;
         if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
         const i = idx(nc, nr);
-        if (mode === 'draw') {
+        if (useMode === 'draw') {
           grid[i]   = WALL;
           colors[i] = null;
-        } else if (mode === 'erase') {
+        } else if (useMode === 'erase') {
           grid[i]   = EMPTY;
           colors[i] = null;
         }
@@ -138,14 +185,14 @@
     }
   }
 
-  function paintLine(c0, r0, c1, r1, brushR) {
+  function paintLine(c0, r0, c1, r1, brushR, m) {
     // Bresenham
     let dx = Math.abs(c1 - c0), sx = c0 < c1 ? 1 : -1;
     let dy = -Math.abs(r1 - r0), sy = r0 < r1 ? 1 : -1;
     let err = dx + dy;
     let c = c0, r = r0;
     while (true) {
-      paintAt(c, r, brushR);
+      paintAt(c, r, brushR, m);
       if (c === c1 && r === r1) break;
       const e2 = 2 * err;
       if (e2 >= dy) { err += dy; c += sx; }
@@ -160,6 +207,10 @@
     isPointerDown = true;
     const cell = canvasCell(e);
     lastCell = cell;
+
+    // Start a new stroke (in virtual coords)
+    currentStroke = { m: mode === 'erase' ? 'e' : 'd', pts: [gridToVirtual(cell.c, cell.r)] };
+
     paintAt(cell.c, cell.r, 2);
     hasDrawn = true;
     hideOverlay();
@@ -173,6 +224,14 @@
     if (lastCell) {
       paintLine(lastCell.c, lastCell.r, cell.c, cell.r, 2);
     }
+    if (currentStroke) {
+      // Push the new point in virtual coords; dedupe consecutive duplicates.
+      const v = gridToVirtual(cell.c, cell.r);
+      const last = currentStroke.pts[currentStroke.pts.length - 1];
+      if (!last || last[0] !== v[0] || last[1] !== v[1]) {
+        currentStroke.pts.push(v);
+      }
+    }
     lastCell = cell;
     render();
   }
@@ -180,6 +239,30 @@
   function onPointerUp(e) {
     isPointerDown = false;
     lastCell = null;
+    if (currentStroke && currentStroke.pts.length > 0) {
+      strokes.push(currentStroke);
+    }
+    currentStroke = null;
+  }
+
+  // Replay all strokes onto the current grid (used after resize / load-from-hash)
+  function replayStrokes() {
+    if (!strokes.length) return;
+    for (const s of strokes) {
+      const m = s.m === 'e' ? 'erase' : 'draw';
+      let prev = null;
+      for (const p of s.pts) {
+        const g = virtualToGrid(p[0], p[1]);
+        if (prev) {
+          paintLine(prev.c, prev.r, g.c, g.r, 2, m);
+        } else {
+          paintAt(g.c, g.r, 2, m);
+        }
+        prev = g;
+      }
+    }
+    hasDrawn = true;
+    hideOverlay();
   }
 
   // ── Drop ───────────────────────────────────────────────────────────────────
@@ -189,36 +272,25 @@
       return;
     }
     if (dropping) {
-      // Already pouring: let the user trigger a refill so they can keep going.
+      // Already pouring: trigger another wave from the top.
       refillSand();
       return;
     }
 
     dropping = true;
     dropFrame = 0;
-    document.getElementById('btn-drop').disabled = false;
-    document.getElementById('btn-drop').textContent = 'pour more';
+    setPhase('physics');
 
     // Show loading micro-copy briefly
     showOverlay('watching gravity\ndo its thing...');
     setTimeout(hideOverlay, 900);
 
     loop();
-
-    // Show share panel after the sand has had time to settle.
-    if (settleTimer) clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      document.getElementById('share').style.display = 'flex';
-    }, 6500);
   };
 
   // Reset the spawn clock so another wave of sand pours from the top.
   function refillSand() {
     dropFrame = 0;
-    if (settleTimer) clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      document.getElementById('share').style.display = 'flex';
-    }, 6500);
   }
 
   // ── Sand Simulation ────────────────────────────────────────────────────────
@@ -255,7 +327,16 @@
   }
 
   function stepSand() {
-    // Iterate bottom-to-top so falling doesn't cascade in same frame
+    // Iterate bottom-to-top so falling doesn't cascade in same frame.
+    // Bottom row is "open sky": any sand that lands there falls off-screen.
+    for (let c = 0; c < COLS; c++) {
+      const i = idx(c, ROWS - 1);
+      if (grid[i] === SAND) {
+        grid[i] = EMPTY;
+        colors[i] = null;
+      }
+    }
+
     for (let r = ROWS - 2; r >= 0; r--) {
       // Randomize column order to avoid directional bias
       const cols = shuffledCols();
@@ -345,21 +426,194 @@
     animId = requestAnimationFrame(loop);
   }
 
-  // ── Save ───────────────────────────────────────────────────────────────────
-  window.saveSculpture = function () {
-    const link = document.createElement('a');
-    link.download = 'gravity-doodle.png';
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  };
+  // ── Share via URL fragment ─────────────────────────────────────────────────
+  // Encoding: we serialise strokes as a compact byte stream, then base64url it
+  // into the URL fragment. URL fragment lengths in modern browsers are
+  // effectively bounded by browser practical limits (~64KB+ in Chrome/FF/Safari);
+  // we additionally cap our payload at ~6KB-ish via point decimation.
+  //
+  // Stream format (varint-coded for compactness):
+  //   uint8  version (1)
+  //   uint8  mode-mask reserved
+  //   for each stroke:
+  //     uint8 mode (0=draw, 1=erase)
+  //     uvar  numPoints
+  //     uvar  x0, y0   (absolute, 0..VCOLS-1 / 0..VROWS-1)
+  //     for each subsequent point:
+  //       svar dx, svar dy   (signed deltas, zig-zag encoded)
+  //   trailing 0xFF terminator
+  //
+  // varint = base-128 little-endian, high bit = continuation.
 
-  // share() is also exposed for URL sharing
-  window.share = function () {
+  function uvarPush(arr, n) {
+    n = n >>> 0;
+    while (n >= 0x80) {
+      arr.push((n & 0x7f) | 0x80);
+      n = n >>> 7;
+    }
+    arr.push(n & 0x7f);
+  }
+  function svarPush(arr, n) {
+    // zig-zag
+    const z = (n << 1) ^ (n >> 31);
+    uvarPush(arr, z >>> 0);
+  }
+  function uvarRead(view, posRef) {
+    let result = 0, shift = 0, b;
+    do {
+      b = view[posRef.p++];
+      result |= (b & 0x7f) << shift;
+      shift += 7;
+    } while (b & 0x80);
+    return result >>> 0;
+  }
+  function svarRead(view, posRef) {
+    const z = uvarRead(view, posRef);
+    return (z >>> 1) ^ -(z & 1);
+  }
+
+  function decimateStrokes(src, maxPts) {
+    // Drop in-between points until the total is under maxPts.
+    // Always keep first and last point of each stroke.
+    let total = src.reduce((n, s) => n + s.pts.length, 0);
+    if (total <= maxPts) return src;
+    const ratio = total / maxPts;
+    const step = Math.max(2, Math.ceil(ratio));
+    const out = [];
+    for (const s of src) {
+      if (s.pts.length <= 2) { out.push({ m: s.m, pts: s.pts.slice() }); continue; }
+      const kept = [s.pts[0]];
+      for (let i = 1; i < s.pts.length - 1; i++) {
+        if (i % step === 0) kept.push(s.pts[i]);
+      }
+      kept.push(s.pts[s.pts.length - 1]);
+      out.push({ m: s.m, pts: kept });
+    }
+    return out;
+  }
+
+  function encodeStrokes(src) {
+    const data = decimateStrokes(src, 1500);
+    const bytes = [];
+    bytes.push(1); // version
+    bytes.push(0); // reserved
+    for (const s of data) {
+      bytes.push(s.m === 'e' ? 1 : 0);
+      uvarPush(bytes, s.pts.length);
+      const p0 = s.pts[0];
+      uvarPush(bytes, p0[0]);
+      uvarPush(bytes, p0[1]);
+      let px = p0[0], py = p0[1];
+      for (let i = 1; i < s.pts.length; i++) {
+        const p = s.pts[i];
+        svarPush(bytes, p[0] - px);
+        svarPush(bytes, p[1] - py);
+        px = p[0]; py = p[1];
+      }
+    }
+    bytes.push(0xff);
+
+    // base64url
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const b64 = btoa(bin)
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return b64;
+  }
+
+  function decodeStrokes(b64) {
+    try {
+      const norm = b64.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = norm.length % 4 === 0 ? '' : '='.repeat(4 - (norm.length % 4));
+      const bin = atob(norm + pad);
+      const view = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+      const pos = { p: 0 };
+      const version = view[pos.p++];
+      if (version !== 1) return null;
+      pos.p++; // reserved
+      const out = [];
+      while (pos.p < view.length && view[pos.p] !== 0xff) {
+        const m = view[pos.p++] === 1 ? 'e' : 'd';
+        const n = uvarRead(view, pos);
+        if (!n) continue;
+        const x0 = uvarRead(view, pos);
+        const y0 = uvarRead(view, pos);
+        const pts = [[x0, y0]];
+        let px = x0, py = y0;
+        for (let i = 1; i < n; i++) {
+          const dx = svarRead(view, pos);
+          const dy = svarRead(view, pos);
+          px += dx; py += dy;
+          pts.push([px, py]);
+        }
+        out.push({ m, pts });
+      }
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function tryLoadFromHash() {
+    const h = location.hash;
+    if (!h || h.length < 2) return false;
+    const m = h.match(/^#s=(.+)$/);
+    if (!m) return false;
+    const decoded = decodeStrokes(m[1]);
+    if (!decoded || !decoded.length) return false;
+    strokes = decoded;
+    initGrid();
+    replayStrokes();
+    return true;
+  }
+
+  // ── Share ─────────────────────────────────────────────────────────────────
+  window.shareSculpture = function () {
+    if (!strokes.length) return;
+    const encoded = encodeStrokes(strokes);
+    const url = location.origin + location.pathname + '#s=' + encoded;
+    const status = document.getElementById('share-status');
+
+    // Update the address bar so the URL bar itself is shareable too.
+    history.replaceState(null, '', '#s=' + encoded);
+
     if (navigator.share) {
-      navigator.share({ title: document.title, url: location.href });
+      navigator.share({
+        title: 'gravity doodle',
+        text: 'I made a sand sculpture — try it / remix it:',
+        url: url,
+      }).then(
+        () => { if (status) status.textContent = 'shared!'; },
+        () => copyToClipboard(url, status)
+      );
     } else {
-      navigator.clipboard.writeText(location.href)
-        .then(() => alert('Link copied!'));
+      copyToClipboard(url, status);
     }
   };
+
+  function copyToClipboard(text, statusEl) {
+    const setMsg = (m) => { if (statusEl) statusEl.textContent = m; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => setMsg('link copied — paste anywhere'),
+        () => setMsg('copy failed — link is in the address bar')
+      );
+    } else {
+      // Legacy fallback
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setMsg('link copied — paste anywhere');
+      } catch (e) {
+        setMsg('link is in the address bar');
+      }
+    }
+  }
 })();

@@ -70,7 +70,7 @@ header h1 {
   aspect-ratio: 3 / 4;
   /* Cap the canvas so the action button stays visible on short viewports.
      Subtract roughly the space used by header + controls + padding. */
-  max-height: calc(100dvh - 260px);
+  max-height: calc(100dvh - 280px);
   border: 2px solid var(--border);
   background: #0f0e0c;
   overflow: hidden;
@@ -104,8 +104,8 @@ header h1 {
   border: 1px solid var(--border);
 }
 
-#overlay-msg.hidden {
-  display: none;
+.hidden {
+  display: none !important;
 }
 
 #controls {
@@ -114,6 +114,14 @@ header h1 {
   gap: 8px;
   width: 100%;
   order: 2;
+}
+
+#draw-controls,
+#physics-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
 }
 
 #action-row {
@@ -203,46 +211,75 @@ header h1 {
   border-color: #e06020;
 }
 
-#share {
-  width: 100%;
+/* ── Physics phase controls ─────────────────────────────────────────────── */
+
+#physics-row {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  animation: fadein 0.6s ease;
-  order: 3;
-}
-
-#settle-msg {
-  font-size: 0.75rem;
-  color: var(--muted);
-  letter-spacing: 0.12em;
-  text-align: center;
-}
-
-#share button {
+  gap: 8px;
   width: 100%;
+}
+
+.phys-btn {
+  flex: 1;
   height: 44px;
-  background: #1a1714;
+  background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
   font-family: inherit;
   font-size: 0.78rem;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   cursor: pointer;
   border-radius: 0;
-  transition: border-color 0.15s, color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
   text-transform: lowercase;
 }
 
-#share button:hover {
-  border-color: var(--muted);
+.phys-btn:hover {
   color: var(--amber);
+  border-color: var(--amber);
 }
 
-@keyframes fadein {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+.phys-btn.reset-btn:hover {
+  color: #e06020;
+  border-color: #e06020;
+}
+
+#share-row {
+  display: flex;
+  width: 100%;
+}
+
+#btn-share {
+  width: 100%;
+  height: 48px;
+  background: var(--amber);
+  color: var(--bg);
+  border: 2px solid var(--amber);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: lowercase;
+  transition: filter 0.15s, transform 0.05s;
+}
+
+#btn-share:hover {
+  filter: brightness(1.1);
+}
+
+#btn-share:active {
+  transform: translateY(1px);
+}
+
+.share-status {
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-align: center;
+  min-height: 1em;
+  margin-top: 2px;
 }
 
 /* Short viewports: tighten everything so controls are visible without scrolling. */
@@ -251,10 +288,12 @@ header h1 {
   #app { gap: 8px; }
   header h1 { font-size: 1.2rem; }
   #tagline { font-size: 0.68rem; }
-  #canvas-wrap { max-height: calc(100dvh - 230px); }
+  #canvas-wrap { max-height: calc(100dvh - 250px); }
   #btn-drop { height: 46px; font-size: 0.9rem; }
+  #btn-share { height: 44px; font-size: 0.82rem; }
+  .phys-btn { height: 40px; }
 }
 
 @media (max-height: 560px) {
-  #canvas-wrap { max-height: calc(100dvh - 210px); }
+  #canvas-wrap { max-height: calc(100dvh - 230px); }
 }
