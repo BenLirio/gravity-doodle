@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gravity Doodle</title>
   <meta property="og:title" content="Gravity Doodle">
-  <meta property="og:description" content="Paint walls, sand, water, oil, fire, and plant — then pour more from the top. A tiny multi-material physics sandbox.">
+  <meta property="og:description" content="Invent new elements with AI and watch them fight gravity. A tiny falling-sand sandbox where the rules are yours.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://benlirio.com/gravity-doodle/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,54 +19,49 @@
   <div id="app">
     <header>
       <h1>gravity doodle</h1>
-      <p id="tagline">paint materials, watch them fight gravity</p>
+      <p id="tagline">invent elements. watch them fight gravity.</p>
     </header>
 
     <div id="controls">
-      <!-- DRAW PHASE: material palette + clear + pour -->
-      <div id="draw-controls">
-        <div id="tool-row" role="group" aria-label="material">
-          <span id="tool-label">paint:</span>
-          <button class="tool-btn mat-wall active"  data-material="wall"  onclick="setMaterial('wall')"  aria-pressed="true">wall</button>
-          <button class="tool-btn mat-sand"         data-material="sand"  onclick="setMaterial('sand')"  aria-pressed="false">sand</button>
-          <button class="tool-btn mat-water"        data-material="water" onclick="setMaterial('water')" aria-pressed="false">water</button>
-          <button class="tool-btn mat-oil"          data-material="oil"   onclick="setMaterial('oil')"   aria-pressed="false">oil</button>
-          <button class="tool-btn mat-fire"         data-material="fire"  onclick="setMaterial('fire')"  aria-pressed="false">fire</button>
-          <button class="tool-btn mat-plant"        data-material="plant" onclick="setMaterial('plant')" aria-pressed="false">plant</button>
-          <button class="tool-btn mat-erase"        data-material="erase" onclick="setMaterial('erase')" aria-pressed="false">erase</button>
-          <button id="btn-clear" class="tool-btn clear-btn" onclick="clearAll()">clear</button>
-        </div>
-        <div id="action-row">
-          <button id="btn-drop" onclick="startDrop()">pour wall</button>
-        </div>
+      <div id="action-row">
+        <button id="btn-drop" onclick="startDrop()">pour sand</button>
+        <button id="btn-reset" onclick="clearAll()">reset</button>
       </div>
 
-      <!-- PHYSICS PHASE: keep painting while sim runs + pour more + reset + share -->
-      <div id="physics-controls" class="hidden">
-        <div id="phys-tool-row" role="group" aria-label="edit while sim runs">
-          <span id="phys-tool-label">paint:</span>
-          <button class="tool-btn mat-wall active"  data-material="wall"  onclick="setMaterial('wall')"  aria-pressed="true">wall</button>
-          <button class="tool-btn mat-sand"         data-material="sand"  onclick="setMaterial('sand')"  aria-pressed="false">sand</button>
-          <button class="tool-btn mat-water"        data-material="water" onclick="setMaterial('water')" aria-pressed="false">water</button>
-          <button class="tool-btn mat-oil"          data-material="oil"   onclick="setMaterial('oil')"   aria-pressed="false">oil</button>
-          <button class="tool-btn mat-fire"         data-material="fire"  onclick="setMaterial('fire')"  aria-pressed="false">fire</button>
-          <button class="tool-btn mat-plant"        data-material="plant" onclick="setMaterial('plant')" aria-pressed="false">plant</button>
-          <button class="tool-btn mat-erase"        data-material="erase" onclick="setMaterial('erase')" aria-pressed="false">erase</button>
+      <div id="tool-row" role="group" aria-label="material palette">
+        <div class="palette-label">paint:</div>
+        <div id="palette-buttons">
+          <!-- built-in material buttons, rendered by JS -->
         </div>
-        <div id="physics-row">
-          <button id="btn-pour"  class="phys-btn" onclick="startDrop()">pour wall</button>
-          <button id="btn-reset" class="phys-btn reset-btn" onclick="clearAll()">reset</button>
-        </div>
-        <div id="share-row">
-          <button id="btn-share" onclick="shareSculpture()">share this sculpture</button>
-        </div>
-        <p id="share-status" class="share-status"></p>
+        <button id="btn-invent" class="invent-btn" onclick="openInvent()" aria-label="invent new element">
+          <span class="invent-plus">+</span>
+          <span class="invent-label">invent element</span>
+        </button>
       </div>
     </div>
 
     <div id="canvas-wrap">
       <canvas id="main-canvas"></canvas>
       <div id="overlay-msg" class="hidden"></div>
+    </div>
+
+    <p id="hint">paint on the canvas. tap "invent element" to add your own rule.</p>
+  </div>
+
+  <!-- Invent modal -->
+  <div id="invent-overlay" class="invent-overlay hidden" role="dialog" aria-labelledby="invent-title">
+    <div class="invent-modal">
+      <h3 id="invent-title">invent a new element</h3>
+      <p class="invent-hint">name it. describe how it behaves. the AI generates the physics.</p>
+      <label for="invent-name" class="invent-field-label">name</label>
+      <input id="invent-name" type="text" maxlength="20" placeholder="e.g. lava, honey, glitter, acid">
+      <label for="invent-desc" class="invent-field-label">what it does <span class="invent-optional">(optional)</span></label>
+      <textarea id="invent-desc" maxlength="240" placeholder="e.g. thick molten rock that burns plants and sinks in water"></textarea>
+      <p id="invent-status" class="invent-status"></p>
+      <div class="invent-row">
+        <button type="button" id="invent-cancel" onclick="closeInvent()">cancel</button>
+        <button type="button" id="invent-submit" class="primary" onclick="submitInvent()">invent</button>
+      </div>
     </div>
   </div>
 </body>

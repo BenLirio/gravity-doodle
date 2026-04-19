@@ -1,5 +1,6 @@
-/* Aesthetic: Risograph/zine print — charcoal dark background, Space Mono, ink-bleed informal feel.
-   Material palette uses small coloured swatches per button. */
+/* Aesthetic: Risograph/zine print — charcoal dark background, Space Mono,
+   ink-bleed informal feel. Custom elements override their own swatch via
+   inline style. */
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -17,8 +18,6 @@
   --btn-bg: #2e2718;
   --btn-active-text: #1a1714;
 
-  /* Material accent colours — used as the button's active background and as
-     a small swatch dot when inactive. Picked to roughly match in-sim colour. */
   --mat-wall:  #d8c8a0;
   --mat-sand:  #e8a030;
   --mat-water: #4aa8d8;
@@ -74,17 +73,197 @@ header h1 {
   letter-spacing: 0.1em;
 }
 
+/* Primary action row — above canvas so it stays above the fold on mobile. */
+#controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  order: 1;
+}
+
+#action-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+#btn-drop {
+  flex: 2;
+  height: 48px;
+  background: var(--amber);
+  color: var(--bg);
+  border: 2px solid var(--amber);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: lowercase;
+  transition: filter 0.15s, transform 0.05s;
+}
+
+#btn-drop:hover:not(:disabled) { filter: brightness(1.1); }
+#btn-drop:active:not(:disabled) { transform: translateY(1px); }
+#btn-drop:disabled { opacity: 0.35; cursor: not-allowed; }
+
+#btn-reset {
+  flex: 1;
+  height: 48px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: lowercase;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+#btn-reset:hover {
+  color: #e06020;
+  border-color: #e06020;
+}
+
+/* Palette */
+#tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+}
+
+.palette-label {
+  width: 100%;
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: lowercase;
+}
+
+#palette-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tool-btn {
+  flex: 0 0 auto;
+  min-width: 60px;
+  height: 32px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  border-radius: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  text-transform: lowercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  position: relative;
+  max-width: 140px;
+}
+
+.tool-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.tool-btn::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--swatch, transparent);
+  border: 1px solid rgba(255,255,255,0.15);
+  flex-shrink: 0;
+}
+
+.tool-btn.mat-wall  { --swatch: var(--mat-wall); }
+.tool-btn.mat-sand  { --swatch: var(--mat-sand); }
+.tool-btn.mat-water { --swatch: var(--mat-water); }
+.tool-btn.mat-oil   { --swatch: var(--mat-oil); }
+.tool-btn.mat-fire  { --swatch: var(--mat-fire); }
+.tool-btn.mat-plant { --swatch: var(--mat-plant); }
+.tool-btn.mat-erase { --swatch: var(--mat-erase); }
+
+.tool-btn.active.mat-wall  { background: var(--mat-wall);  color: #1a1714; border-color: var(--mat-wall);  font-weight: 700; }
+.tool-btn.active.mat-sand  { background: var(--mat-sand);  color: #1a1714; border-color: var(--mat-sand);  font-weight: 700; }
+.tool-btn.active.mat-water { background: var(--mat-water); color: #1a1714; border-color: var(--mat-water); font-weight: 700; }
+.tool-btn.active.mat-oil   { background: var(--mat-oil);   color: #f0e0c0; border-color: var(--mat-oil);   font-weight: 700; }
+.tool-btn.active.mat-fire  { background: var(--mat-fire);  color: #1a1714; border-color: var(--mat-fire);  font-weight: 700; }
+.tool-btn.active.mat-plant { background: var(--mat-plant); color: #1a1714; border-color: var(--mat-plant); font-weight: 700; }
+.tool-btn.active.mat-erase { background: var(--mat-erase); color: #1a1714; border-color: var(--mat-erase); font-weight: 700; }
+
+/* Custom elements use --swatch from inline style. */
+.tool-btn.active.mat-custom {
+  background: var(--swatch);
+  color: #1a1714;
+  border-color: var(--swatch);
+  font-weight: 700;
+}
+
+/* Invent button — amber outline, prominent, always visible. */
+.invent-btn {
+  flex: 0 0 auto;
+  min-width: 124px;
+  height: 32px;
+  background: transparent;
+  color: var(--amber);
+  border: 1.5px dashed var(--amber);
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  text-transform: lowercase;
+  transition: background 0.15s, color 0.15s;
+  margin-left: auto;
+}
+
+.invent-btn:hover {
+  background: var(--amber);
+  color: var(--bg);
+}
+
+.invent-plus {
+  font-size: 1.1rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
+/* Canvas */
 #canvas-wrap {
   position: relative;
   width: 100%;
   aspect-ratio: 3 / 4;
-  max-height: calc(100dvh - 320px);
+  max-height: calc(100dvh - 340px);
   border: 2px solid var(--border);
   background: #0f0e0c;
   overflow: hidden;
   touch-action: none;
   margin: 0 auto;
-  aspect-ratio: 3 / 4;
+  order: 2;
 }
 
 #main-canvas {
@@ -107,240 +286,175 @@ header h1 {
   white-space: pre-wrap;
   line-height: 1.6;
   padding: 12px 18px;
-  background: rgba(26,23,20,0.78);
+  background: rgba(26,23,20,0.82);
   border: 1px solid var(--border);
+  max-width: 80%;
 }
 
-.hidden {
-  display: none !important;
+#hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-align: center;
+  order: 3;
+  margin-top: 2px;
 }
 
-#controls {
+.hidden { display: none !important; }
+
+/* Invent modal overlay */
+.invent-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  background: rgba(0,0,0,0.6);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  order: 2;
-}
-
-#draw-controls,
-#physics-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-
-#action-row {
-  display: flex;
+  align-items: center;
   justify-content: center;
+  padding: 16px;
 }
 
-#btn-drop {
+.invent-modal {
+  background: var(--surface);
+  color: var(--text);
   width: 100%;
-  height: 52px;
-  background: var(--amber);
-  color: var(--bg);
+  max-width: 400px;
+  padding: 18px;
   border: 2px solid var(--amber);
   font-family: inherit;
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 0.2em;
-  cursor: pointer;
-  border-radius: 0;
-  text-transform: lowercase;
-  transition: filter 0.15s, transform 0.05s;
-}
-
-#btn-drop:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-
-#btn-drop:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-#btn-drop:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-#tool-row,
-#phys-tool-row {
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: center;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
 }
 
-#tool-label,
-#phys-tool-label {
-  font-size: 0.7rem;
-  color: var(--muted);
-  letter-spacing: 0.12em;
-  margin-right: 4px;
+.invent-modal h3 {
+  font-size: 1rem;
+  color: var(--amber);
   text-transform: lowercase;
-  width: 100%;
-  text-align: left;
+  letter-spacing: 0.1em;
+  margin-bottom: 2px;
 }
 
-.tool-btn {
-  flex: 1 0 auto;
-  min-width: 56px;
-  max-width: 90px;
-  height: 32px;
-  background: transparent;
+.invent-hint {
+  font-size: 0.72rem;
   color: var(--muted);
-  border: 1px solid var(--border);
-  font-family: inherit;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.invent-field-label {
   font-size: 0.7rem;
+  color: var(--muted);
   letter-spacing: 0.08em;
-  cursor: pointer;
-  border-radius: 0;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
   text-transform: lowercase;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 6px;
-  position: relative;
+  margin-top: 6px;
 }
 
-.tool-btn:hover {
+.invent-optional {
+  color: var(--border);
+  font-size: 0.64rem;
+}
+
+.invent-modal input,
+.invent-modal textarea {
+  background: var(--bg);
   color: var(--text);
-  border-color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  width: 100%;
+  border-radius: 0;
 }
 
-/* Swatch dot on material buttons */
-.tool-btn[data-material]::before {
-  content: '';
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--swatch, transparent);
-  border: 1px solid rgba(255,255,255,0.15);
-  flex-shrink: 0;
+.invent-modal input {
+  height: 36px;
 }
 
-.tool-btn.mat-wall  { --swatch: var(--mat-wall); }
-.tool-btn.mat-sand  { --swatch: var(--mat-sand); }
-.tool-btn.mat-water { --swatch: var(--mat-water); }
-.tool-btn.mat-oil   { --swatch: var(--mat-oil); }
-.tool-btn.mat-fire  { --swatch: var(--mat-fire); }
-.tool-btn.mat-plant { --swatch: var(--mat-plant); }
-.tool-btn.mat-erase { --swatch: var(--mat-erase); }
+.invent-modal textarea {
+  min-height: 64px;
+  resize: vertical;
+}
 
-/* Active material buttons get a filled look in that material's accent. */
-.tool-btn.active.mat-wall  { background: var(--mat-wall);  color: #1a1714; border-color: var(--mat-wall);  font-weight: 700; }
-.tool-btn.active.mat-sand  { background: var(--mat-sand);  color: #1a1714; border-color: var(--mat-sand);  font-weight: 700; }
-.tool-btn.active.mat-water { background: var(--mat-water); color: #1a1714; border-color: var(--mat-water); font-weight: 700; }
-.tool-btn.active.mat-oil   { background: var(--mat-oil);   color: #f0e0c0; border-color: var(--mat-oil);   font-weight: 700; }
-.tool-btn.active.mat-fire  { background: var(--mat-fire);  color: #1a1714; border-color: var(--mat-fire);  font-weight: 700; }
-.tool-btn.active.mat-plant { background: var(--mat-plant); color: #1a1714; border-color: var(--mat-plant); font-weight: 700; }
-.tool-btn.active.mat-erase { background: var(--mat-erase); color: #1a1714; border-color: var(--mat-erase); font-weight: 700; }
+.invent-modal input:focus,
+.invent-modal textarea:focus {
+  outline: none;
+  border-color: var(--amber);
+}
 
-.tool-btn.clear-btn {
+.invent-status {
+  font-size: 0.68rem;
   color: var(--muted);
-  border-color: var(--border);
+  min-height: 1em;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
 }
 
-.tool-btn.clear-btn:hover {
+.invent-status.err {
   color: #e06020;
-  border-color: #e06020;
 }
 
-/* ── Physics phase controls ─────────────────────────────────────────────── */
-
-#physics-row {
+.invent-row {
   display: flex;
   gap: 8px;
-  width: 100%;
+  margin-top: 10px;
+  justify-content: flex-end;
 }
 
-.phys-btn {
-  flex: 1;
-  height: 44px;
+.invent-row button {
+  height: 38px;
+  padding: 0 16px;
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
   font-family: inherit;
   font-size: 0.78rem;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   cursor: pointer;
   border-radius: 0;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
   text-transform: lowercase;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-.phys-btn:hover {
-  color: var(--amber);
-  border-color: var(--amber);
+.invent-row button:hover {
+  color: var(--text);
+  border-color: var(--muted);
 }
 
-.phys-btn.reset-btn:hover {
-  color: #e06020;
-  border-color: #e06020;
-}
-
-#share-row {
-  display: flex;
-  width: 100%;
-}
-
-#btn-share {
-  width: 100%;
-  height: 48px;
+.invent-row button.primary {
   background: var(--amber);
   color: var(--bg);
-  border: 2px solid var(--amber);
-  font-family: inherit;
-  font-size: 0.9rem;
+  border-color: var(--amber);
   font-weight: 700;
-  letter-spacing: 0.18em;
-  cursor: pointer;
-  border-radius: 0;
-  text-transform: lowercase;
-  transition: filter 0.15s, transform 0.05s;
 }
 
-#btn-share:hover {
+.invent-row button.primary:hover {
   filter: brightness(1.1);
 }
 
-#btn-share:active {
-  transform: translateY(1px);
+.invent-row button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.share-status {
-  font-size: 0.72rem;
-  color: var(--muted);
-  letter-spacing: 0.1em;
-  text-align: center;
-  min-height: 1em;
-  margin-top: 2px;
-}
-
-/* Short viewports: tighten. */
+/* Short viewports */
 @media (max-height: 780px) {
   body { padding: 8px 8px 12px; }
   #app { gap: 8px; }
   header h1 { font-size: 1.2rem; }
   #tagline { font-size: 0.68rem; }
-  #canvas-wrap { max-height: calc(100dvh - 300px); }
-  #btn-drop { height: 46px; font-size: 0.9rem; }
-  #btn-share { height: 44px; font-size: 0.82rem; }
-  .phys-btn { height: 40px; }
-  .tool-btn { height: 30px; font-size: 0.66rem; min-width: 52px; }
+  #canvas-wrap { max-height: calc(100dvh - 320px); }
+  #btn-drop, #btn-reset { height: 44px; font-size: 0.85rem; }
+  .tool-btn, .invent-btn { height: 30px; font-size: 0.66rem; }
 }
 
 @media (max-height: 620px) {
-  #canvas-wrap { max-height: calc(100dvh - 270px); }
+  #canvas-wrap { max-height: calc(100dvh - 290px); }
 }
 
-/* Narrow phones: palette is two rows but that's ok — we have the wrap. */
 @media (max-width: 360px) {
-  .tool-btn { min-width: 48px; font-size: 0.62rem; }
+  .tool-btn { min-width: 52px; font-size: 0.62rem; padding: 0 6px; }
+  .invent-btn { min-width: 104px; font-size: 0.66rem; padding: 0 8px; }
 }
