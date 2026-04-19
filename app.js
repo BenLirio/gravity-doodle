@@ -68,9 +68,10 @@
   const SAND_ID  = 2;
   const WATER_ID = 3;
 
-  // Canonical sand: warm amber, the same every time. Per the user, the sand
-  // palette is its identity — randomising it broke recognition.
-  const SAND_PALETTE = ['#e8a030', '#e06020', '#d44010', '#f0c048', '#c83030', '#e87828', '#f0d060', '#b84020'];
+  // Canonical sand: warm amber/golden tones. Earlier palettes leaned into deep
+  // reds which made sand read as lava — a user flagged it explicitly. Keep
+  // this to honey-to-tan variation only.
+  const SAND_PALETTE = ['#e8a030', '#d89028', '#f0b848', '#e8a838', '#d8982c', '#f0c858', '#c88820', '#e0a030'];
 
   function initBuiltIns() {
     registerElement({
