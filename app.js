@@ -163,8 +163,12 @@
   // When a projectile lands on an empty grid cell it deposits as that element.
   let projectiles = [];
 
-  // Screen flash effect after explosion: { intensity 0-1 }
-  let flashIntensity = 0;
+  // Spark particles: pure visual sparks spawned by explosions.
+  // They fly outward from the detonation point in all directions, interacting
+  // with the grid as they travel — ejecting material cells they hit, and
+  // chain-detonating other explosives they contact.
+  // { x, y, vx, vy, life, maxLife, color, power }
+  let sparks = [];
 
   // ── Init ───────────────────────────────────────────────────────────────────
   window.addEventListener('DOMContentLoaded', () => {
@@ -208,7 +212,7 @@
 
     animId = requestAnimationFrame(loop);
 
-    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nnested walls shape the blast.\nchain reactions cascade!');
+    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nsparks shoot in all directions.\nchain reactions cascade!');
     syncActionLabel();
     bindModal();
     bindElementFeedbackModal();
@@ -391,13 +395,13 @@
   window.clearAll = function () {
     pours = [];
     projectiles = [];
-    flashIntensity = 0;
+    sparks = [];
     pendingExplosions = [];
     initGrid();
     selectedKey = 'explosive';
     refreshActiveClass();
     syncActionLabel();
-    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nnested walls shape the blast.\nchain reactions cascade!');
+    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nsparks shoot in all directions.\nchain reactions cascade!');
   };
 
   // ── Drawing ────────────────────────────────────────────────────────────────
@@ -575,100 +579,106 @@
   // The cell is removed from the grid and tracked as a flying body; when it lands
   // on an empty cell it deposits back as that element — creating physical displacement.
   function ejectCell(cx, cy, cellC, cellR, cellId, cellColor, power) {
-    // Direction from explosion center to this cell
     const dc = cellC - cx;
     const dr = cellR - cy;
     const dist = Math.sqrt(dc * dc + dr * dr) || 1;
-    // Speed falls off with distance; closer cells fly faster
-    const speed = (3.5 + Math.random() * 3.5) * power * (1 - dist / 30);
+    const speed = (3.5 + Math.random() * 4.5) * power;
     const px = cellC * CELL + CELL / 2;
     const py = cellR * CELL + CELL / 2;
-    const vx = (dc / dist) * speed + (Math.random() - 0.5) * speed * 0.4;
-    const vy = (dr / dist) * speed - Math.random() * speed * 0.6; // bias upward
+    const vx = (dc / dist) * speed + (Math.random() - 0.5) * speed * 0.3;
+    const vy = (dr / dist) * speed - Math.random() * speed * 0.5; // bias upward
     projectiles.push({ x: px, y: py, vx, vy, id: cellId, color: cellColor });
+  }
+
+  // Spawn spark particles in all directions from a detonation point.
+  // Sparks are pure visual — they fly outward, fade over their lifetime,
+  // and interact with the grid as they travel: ejecting material cells they
+  // hit and chain-detonating other explosives they contact.
+  // sparkCount scales with power; colors cycle through orange → yellow → white.
+  function spawnSparks(c, r, sparkCount, power) {
+    const px = c * CELL + CELL / 2;
+    const py = r * CELL + CELL / 2;
+    const sparkColors = ['#ffffff', '#ffe060', '#ffaa20', '#ff6010', '#ff3000'];
+    for (let i = 0; i < sparkCount; i++) {
+      const angle = (i / sparkCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const speed = (4 + Math.random() * 6) * Math.sqrt(power);
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      const maxLife = 18 + Math.floor(Math.random() * 22);
+      const color = sparkColors[Math.floor(Math.random() * sparkColors.length)];
+      sparks.push({ x: px, y: py, vx, vy, life: maxLife, maxLife, color, power });
+    }
   }
 
   function applyExplosions() {
     if (!pendingExplosions.length) return;
-    const fireId  = keyToId['fire'];
-    const smokeId = keyToId['smoke'];
     // Cap chain reaction depth: if this step's explosions trigger new ones,
     // they go into the NEXT step's queue via a secondary buffer.
     const thisRound = pendingExplosions;
     pendingExplosions = [];
 
     for (const ex of thisRound) {
-      const { c, r, radius, power } = ex;
+      const { c, r, power } = ex;
+      // Number of sparks scales with power — bigger explosions spray more particles
+      const sparkCount = Math.round(24 + power * 20);
+      spawnSparks(c, r, sparkCount, power);
+    }
+    explodedCells.clear();
+  }
 
-      // Screen flash — intensity proportional to power (kept subtle)
-      flashIntensity = Math.min(1, flashIntensity + power * 0.35);
+  // Advance spark particles each frame: move them, fade them, and check grid interactions.
+  // When a spark hits a non-empty cell it ejects that cell as a projectile (physical displacement).
+  // When a spark hits an explosive cell it chain-detonates it.
+  function updateSparks() {
+    if (!sparks.length) return;
+    const alive = [];
+    for (const sp of sparks) {
+      sp.x  += sp.vx;
+      sp.y  += sp.vy;
+      sp.vy += 0.15;  // gentle gravity on sparks
+      sp.vx *= 0.97;
+      sp.vy *= 0.98;
+      sp.life--;
 
-      const r2 = radius * radius;
-      for (let dc = -radius; dc <= radius; dc++) {
-        for (let dr = -radius; dr <= radius; dr++) {
-          const dist2 = dc * dc + dr * dr;
-          if (dist2 > r2) continue;
-          const nc = c + dc, nr = r + dr;
-          if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
-          const ni = idx(nc, nr);
-          const existId = grid[ni];
+      if (sp.life <= 0) continue;
+      if (sp.x < 0 || sp.x >= canvas.width || sp.y < 0 || sp.y >= canvas.height) continue;
 
-          // Chain reaction: if a neighboring cell is also explosive, detonate it too
-          // (but only if it hasn't already exploded this frame to prevent infinite loops)
-          if (existId) {
-            const existSpec = registry[existId];
-            if (existSpec && existSpec.isExplosive && !explodedCells.has(ni)) {
-              explodedCells.add(ni);
-              const chainRadius = existSpec.explosionRadius || 8;
-              const chainPower = (existSpec.explosionPower || 1) * 0.9; // slight damping
-              pendingExplosions.push({ c: nc, r: nr, radius: chainRadius, power: chainPower });
-              grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
-              continue;
-            }
-            // Walls resist explosions; higher power punches through better
-            if (existSpec && existSpec.kind === 'static') {
-              if (Math.random() > power * 0.45) continue;
-            }
+      // Check what grid cell the spark is passing through
+      const gc = Math.floor(sp.x / CELL);
+      const gr = Math.floor(sp.y / CELL);
+      if (gc < 0 || gc >= COLS || gr < 0 || gr >= ROWS) { alive.push(sp); continue; }
+      const gi = idx(gc, gr);
+      const hitId = grid[gi];
+
+      if (hitId) {
+        const hitSpec = registry[hitId];
+        if (hitSpec) {
+          if (hitSpec.isExplosive && !explodedCells.has(gi)) {
+            // Chain reaction: detonate this explosive cell
+            explodedCells.add(gi);
+            const chainPower = (hitSpec.explosionPower || 1) * 0.9;
+            pendingExplosions.push({ c: gc, r: gr, radius: hitSpec.explosionRadius || 8, power: chainPower });
+            grid[gi] = EMPTY; colors[gi] = null; life[gi] = 0;
+            // Spark is consumed in chain reaction
+            continue;
           }
-
-          const normDist = Math.sqrt(dist2) / radius;
-
-          // Non-empty, non-explosive cells: eject as physics projectiles so they
-          // physically fly outward and land elsewhere on the grid.
-          // Walls are destroyed in place (too heavy to eject); everything else
-          // gets launched.
-          if (existId) {
-            const existSpec = registry[existId];
-            const isWall = existSpec && existSpec.kind === 'static';
-            if (!isWall && Math.random() < 0.7) {
-              // Eject as a real physics projectile — cell will land back on grid
-              ejectCell(c, r, nc, nr, existId, colors[ni], power);
-            }
-          }
-
-          // Clear the cell — it was either ejected or destroyed
-          grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
-
-          // Inner core: fire fills the cleared space (game-logic: fire propagates)
-          if (normDist < 0.45 && fireId && Math.random() < power * 0.6) {
-            grid[ni] = fireId;
-            const fSpec = registry[fireId];
-            colors[ni] = colorForSpec(fSpec);
-            if (fSpec.lifeMin) {
-              life[ni] = fSpec.lifeMin + Math.floor(Math.random() * Math.max(1, fSpec.lifeMax - fSpec.lifeMin));
-            }
-          // Outer ring: smoke propagates as a real element (reacts with things)
-          } else if (normDist >= 0.45 && smokeId && Math.random() < 0.45) {
-            grid[ni] = smokeId;
-            const sSpec = registry[smokeId];
-            colors[ni] = colorForSpec(sSpec);
-            if (sSpec.lifeMin) {
-              life[ni] = sSpec.lifeMin + Math.floor(Math.random() * Math.max(1, sSpec.lifeMax - sSpec.lifeMin));
-            }
+          // Eject non-wall cells the spark punches through
+          const isWall = hitSpec.kind === 'static';
+          if (!isWall && Math.random() < 0.55) {
+            ejectCell(Math.floor(sp.x / CELL - sp.vx / CELL),
+                      Math.floor(sp.y / CELL - sp.vy / CELL),
+                      gc, gr, hitId, colors[gi], sp.power * 0.8);
+            grid[gi] = EMPTY; colors[gi] = null; life[gi] = 0;
+          } else if (isWall && Math.random() < sp.power * 0.3) {
+            // High-power sparks can chip away walls
+            grid[gi] = EMPTY; colors[gi] = null; life[gi] = 0;
           }
         }
       }
+
+      alive.push(sp);
     }
+    sparks = alive;
     explodedCells.clear();
   }
 
@@ -1132,12 +1142,23 @@
       ctx.fillRect(p.x - CELL / 2, p.y - CELL / 2, CELL, CELL);
     }
 
-    // Explosion flash overlay
-    if (flashIntensity > 0.01) {
-      ctx.fillStyle = `rgba(255, 200, 100, ${Math.min(0.7, flashIntensity * 0.7)})`;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      flashIntensity *= 0.72; // decay flash quickly
+    // Draw spark particles — drawn as small bright streaks fading with age
+    for (const sp of sparks) {
+      const alpha = sp.life / sp.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = sp.color;
+      // Draw a small streak in the direction of travel
+      const len = Math.sqrt(sp.vx * sp.vx + sp.vy * sp.vy) * 0.7 + 1;
+      const nx = sp.vx / (len || 1), ny = sp.vy / (len || 1);
+      ctx.beginPath();
+      ctx.moveTo(sp.x - nx * len, sp.y - ny * len);
+      ctx.lineTo(sp.x + nx * 1, sp.y + ny * 1);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = sp.color;
+      ctx.stroke();
+      ctx.fillRect(sp.x - 1, sp.y - 1, 2, 2);
     }
+    ctx.globalAlpha = 1;
   }
 
   // ── Loop ───────────────────────────────────────────────────────────────────
@@ -1145,6 +1166,7 @@
     spawnFromPours();
     step();
     updateProjectiles();
+    updateSparks();
     render();
     animId = requestAnimationFrame(loop);
   }
