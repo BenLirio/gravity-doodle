@@ -1,9 +1,13 @@
-// Gravity Doodle — an AI-driven falling-sand sandbox.
+// Gravity Doodle — an AI-driven falling-sand physics sandbox.
+// Explosions are a CORE mechanic. Two built-in explosive materials:
+//   EXPLOSIVE (powder) — bright red, stable until it touches ANYTHING
+//                        that isn't explosive; then it chain-blasts outward
+//                        in every direction with flying debris.
+//   NITRO (liquid)     — orange, flows like water, violently detonates on
+//                        contact with any non-liquid material.
 //
-// The seed palette is intentionally tiny (wall, sand, water). Everything
-// else is invented by the user via the AI: name an element, describe how
-// it behaves in plain words, and the LLM returns a structured physics
-// spec that joins the palette for the session.
+// The seed palette: wall, sand, water, explosive, nitro.
+// Everything else is invented by the user via the AI.
 //
 // Physics kinds:
 //   static   — never moves (wall, plant, ice).
@@ -29,7 +33,8 @@
 // Special reaction flag `explodes: true` — if present on a reaction, when
 // it fires it triggers a radial explosion instead of the normal cell swap.
 // The `explosionRadius` and `explosionPower` fields control blast size and
-// how much fire/debris spawns. This makes TNT and bomb elements feel real.
+// how much fire/debris spawns. Explosions spawn flying debris particles that
+// scatter outward in every direction, making blasts feel physically dramatic.
 
 (function () {
   // ── Constants ──────────────────────────────────────────────────────────────
@@ -74,9 +79,11 @@
   // ── Built-in seed elements ─────────────────────────────────────────────────
   // Three only — the rest are AI-invented. Stable ids so reactions can refer
   // to them.
-  const WALL_ID  = 1;
-  const SAND_ID  = 2;
-  const WATER_ID = 3;
+  const WALL_ID      = 1;
+  const SAND_ID      = 2;
+  const WATER_ID     = 3;
+  const EXPLOSIVE_ID = 4;
+  const NITRO_ID     = 5;
 
   // Canonical sand: warm amber/golden tones. Earlier palettes leaned into deep
   // reds which made sand read as lava — a user flagged it explicitly. Keep
@@ -105,6 +112,31 @@
       isBuiltIn: true,
       reactions: [],
     });
+    // EXPLOSIVE: red powder. Stable on its own. Explodes violently when it
+    // touches ANYTHING that isn't also explosive. Triggers chain reactions
+    // with adjacent explosive cells. The blast scatters debris in all directions.
+    registerElement({
+      id: EXPLOSIVE_ID, key: 'explosive', displayName: 'explosive',
+      kind: 'powder', density: 4, flow: 0.45, stickiness: 0,
+      colors: ['#e02020', '#ff3030', '#c01010', '#ff5040', '#ff1010'],
+      isBuiltIn: true,
+      isExplosive: true,
+      explosionRadius: 12,
+      explosionPower: 1.8,
+      reactions: [],
+    });
+    // NITRO: liquid explosive. Flows like water, detonates on contact with
+    // any non-liquid (wall, powder, static). Pooling nitro can cause cascades.
+    registerElement({
+      id: NITRO_ID, key: 'nitro', displayName: 'nitro',
+      kind: 'liquid', density: 4, viscosity: 0.05, stickiness: 0,
+      colors: ['#ff8010', '#e86000', '#ffa030', '#ff6000', '#ffb840'],
+      isBuiltIn: true,
+      isExplosive: true,
+      explosionRadius: 9,
+      explosionPower: 1.4,
+      reactions: [],
+    });
   }
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -115,7 +147,7 @@
   let life;        // Uint8Array auxiliary lifetime (gas decay)
   let flags;       // Uint8Array per-cell flags (bit0=moved, bit1=reacted)
 
-  let selectedKey = 'sand';
+  let selectedKey = 'explosive';
   let isPointerDown = false;
   let lastCell = null;
   let lastPointer = null;        // {c, r} of most recent pointer position
@@ -124,6 +156,14 @@
 
   // Active pours: top-of-screen curtains. { id, frames, total, kind }
   let pours = [];
+
+  // Debris particles: flying shrapnel after explosions.
+  // Each: { x, y, vx, vy, life, maxLife, color }
+  // These are rendered as sub-cell dots flying in arc trajectories.
+  let debris = [];
+
+  // Screen flash effect after explosion: { intensity 0-1 }
+  let flashIntensity = 0;
 
   // ── Init ───────────────────────────────────────────────────────────────────
   window.addEventListener('DOMContentLoaded', () => {
@@ -167,7 +207,7 @@
 
     animId = requestAnimationFrame(loop);
 
-    showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
+    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nnested walls shape the blast.\nchain reactions cascade!');
     syncActionLabel();
     bindModal();
     bindElementFeedbackModal();
@@ -211,7 +251,7 @@
 
     // Seeds first in their canonical order, then invented elements in insertion
     // order, then the erase tool.
-    const orderedIds = [WALL_ID, SAND_ID, WATER_ID];
+    const orderedIds = [WALL_ID, SAND_ID, WATER_ID, EXPLOSIVE_ID, NITRO_ID];
     const customIds = Object.keys(registry)
       .map(n => +n)
       .filter(id => !registry[id].isBuiltIn)
@@ -231,7 +271,9 @@
   function buildMaterialButton(spec) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'tool-btn ' + (spec.isBuiltIn ? ('mat-' + spec.key) : 'mat-custom');
+    // isExplosive built-ins get a special pulsing class for visibility
+    const extraClass = spec.isBuiltIn && spec.isExplosive ? ' mat-explosive-builtin' : '';
+    btn.className = 'tool-btn ' + (spec.isBuiltIn ? ('mat-' + spec.key) : 'mat-custom') + extraClass;
     btn.setAttribute('data-key', spec.key);
     if (!spec.isBuiltIn) {
       btn.style.setProperty('--swatch', spec.colors[0] || '#e8a030');
@@ -347,11 +389,14 @@
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.clearAll = function () {
     pours = [];
+    debris = [];
+    flashIntensity = 0;
+    pendingExplosions = [];
     initGrid();
-    selectedKey = 'sand';
+    selectedKey = 'explosive';
     refreshActiveClass();
     syncActionLabel();
-    showOverlay('paint with your finger\n\ntap "invent element" to add\nany material you can describe');
+    showOverlay('paint explosive (red) onto the canvas\nthen pour sand on top to detonate!\n\nnested walls shape the blast.\nchain reactions cascade!');
   };
 
   // ── Drawing ────────────────────────────────────────────────────────────────
@@ -516,19 +561,58 @@
 
   // ── Explosion system ───────────────────────────────────────────────────────
   // Queue of pending explosions: { c, r, radius, power }. Applied after
-  // reactions each step so a chain can enqueue new explosions.
+  // reactions each step so a chain can enqueue new explosions (chains).
   let pendingExplosions = [];
+  // Track cells that already exploded this step to prevent double-triggering
+  let explodedCells = new Set();
 
   function enqueueExplosion(c, r, radius, power) {
     pendingExplosions.push({ c, r, radius: radius || 8, power: power || 1 });
+  }
+
+  // Debris colors for shrapnel particles
+  const DEBRIS_COLORS = ['#ff8020', '#ffb040', '#ff4010', '#ffd060', '#ff6030', '#ffe080', '#ff2000', '#ffffff'];
+
+  function spawnDebris(cx, cy, radius, power) {
+    // Spawn debris particles flying outward in all directions.
+    // Number of debris pieces scales with explosion power and radius.
+    const count = Math.floor(radius * power * 6 + 20);
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = (1.5 + Math.random() * 4.5) * power;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      const maxLife = 18 + Math.floor(Math.random() * 30);
+      debris.push({
+        x: cx * CELL + CELL / 2 + (Math.random() - 0.5) * radius * CELL * 0.4,
+        y: cy * CELL + CELL / 2 + (Math.random() - 0.5) * radius * CELL * 0.4,
+        vx, vy,
+        life: maxLife,
+        maxLife,
+        color: DEBRIS_COLORS[Math.floor(Math.random() * DEBRIS_COLORS.length)],
+        size: 1 + Math.random() * 3,
+      });
+    }
   }
 
   function applyExplosions() {
     if (!pendingExplosions.length) return;
     const fireId  = keyToId['fire'];
     const smokeId = keyToId['smoke'];
-    for (const ex of pendingExplosions) {
+    // Cap chain reaction depth: if this step's explosions trigger new ones,
+    // they go into the NEXT step's queue via a secondary buffer.
+    const thisRound = pendingExplosions;
+    pendingExplosions = [];
+
+    for (const ex of thisRound) {
       const { c, r, radius, power } = ex;
+
+      // Screen flash — intensity proportional to power
+      flashIntensity = Math.min(1, flashIntensity + power * 0.5);
+
+      // Spawn flying debris
+      spawnDebris(c, r, radius, power);
+
       const r2 = radius * radius;
       for (let dc = -radius; dc <= radius; dc++) {
         for (let dr = -radius; dr <= radius; dr++) {
@@ -538,24 +622,39 @@
           if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
           const ni = idx(nc, nr);
           const existId = grid[ni];
+
+          // Chain reaction: if a neighboring cell is also explosive, detonate it too
+          // (but only if it hasn't already exploded this frame to prevent infinite loops)
           if (existId) {
             const existSpec = registry[existId];
-            // Walls resist explosions; denser walls absorb more
+            if (existSpec && existSpec.isExplosive && !explodedCells.has(ni)) {
+              explodedCells.add(ni);
+              const chainRadius = existSpec.explosionRadius || 8;
+              const chainPower = (existSpec.explosionPower || 1) * 0.9; // slight damping
+              pendingExplosions.push({ c: nc, r: nr, radius: chainRadius, power: chainPower });
+              grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
+              continue;
+            }
+            // Walls resist explosions; higher power punches through better
             if (existSpec && existSpec.kind === 'static') {
-              if (Math.random() > power * 0.35) continue;
+              if (Math.random() > power * 0.45) continue;
             }
           }
-          // Core: clear cells; chance to spawn fire; outer ring → smoke
+
+          // Eject material outward as debris color before clearing
           const normDist = Math.sqrt(dist2) / radius;
           grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
-          if (normDist < 0.5 && fireId && Math.random() < power * 0.7) {
+
+          // Inner core: fire spawns
+          if (normDist < 0.45 && fireId && Math.random() < power * 0.75) {
             grid[ni] = fireId;
             const fSpec = registry[fireId];
             colors[ni] = colorForSpec(fSpec);
             if (fSpec.lifeMin) {
               life[ni] = fSpec.lifeMin + Math.floor(Math.random() * Math.max(1, fSpec.lifeMax - fSpec.lifeMin));
             }
-          } else if (normDist >= 0.5 && smokeId && Math.random() < 0.5) {
+          // Outer ring: smoke + a chance of fire licks
+          } else if (normDist >= 0.45 && smokeId && Math.random() < 0.55) {
             grid[ni] = smokeId;
             const sSpec = registry[smokeId];
             colors[ni] = colorForSpec(sSpec);
@@ -566,7 +665,53 @@
         }
       }
     }
-    pendingExplosions = [];
+    explodedCells.clear();
+  }
+
+  // ── Explosive contact detection ─────────────────────────────────────────────
+  // Called during the reaction pass. Built-in explosives (explosive powder,
+  // nitro liquid) detonate the moment they touch ANY non-explosive material.
+  // This is different from reaction-based explosions which only fire on
+  // specific `other` element contacts.
+  function applyExplosiveContacts() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const i = idx(c, r);
+        const id = grid[i];
+        if (!id) continue;
+        const spec = registry[id];
+        if (!spec || !spec.isExplosive) continue;
+        if (flags[i] & 2) continue;
+
+        // Check all 8 neighbors for non-explosive contact
+        let triggered = false;
+        for (const [dc, dr] of NBR_DIRS) {
+          const nc = c + dc, nr = r + dr;
+          if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+          const ni = idx(nc, nr);
+          const nid = grid[ni];
+          if (!nid) continue; // empty
+          const nSpec = registry[nid];
+          if (!nSpec) continue;
+          // Don't trigger on contact with other explosives — they'll chain
+          if (nSpec.isExplosive) continue;
+          // Trigger! Mark this cell as reacted and enqueue explosion
+          triggered = true;
+          break;
+        }
+
+        if (triggered) {
+          const cKey = i;
+          if (!explodedCells.has(cKey)) {
+            explodedCells.add(cKey);
+            enqueueExplosion(c, r, spec.explosionRadius || 10, spec.explosionPower || 1.5);
+            grid[i] = EMPTY; colors[i] = null; life[i] = 0;
+            flags[i] |= 2;
+          }
+        }
+      }
+    }
+    explodedCells.clear();
   }
 
   function applyReactions() {
@@ -696,6 +841,7 @@
       }
     }
 
+    applyExplosiveContacts();
     applyReactions();
     applyExplosions();
     applyCellular();
@@ -918,10 +1064,28 @@
     return _colArr;
   }
 
+  // ── Debris particle update ──────────────────────────────────────────────────
+  function updateDebris() {
+    const alive = [];
+    for (const p of debris) {
+      p.x  += p.vx;
+      p.y  += p.vy;
+      p.vy += 0.18;  // gravity pulls debris down
+      p.vx *= 0.97;  // air drag
+      p.life--;
+      if (p.life > 0 && p.x >= 0 && p.x < canvas.width && p.y >= 0 && p.y < canvas.height) {
+        alive.push(p);
+      }
+    }
+    debris = alive;
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
   function render() {
     ctx.fillStyle = '#0f0e0c';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw grid cells
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const i = idx(c, r);
@@ -931,12 +1095,29 @@
         ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
       }
     }
+
+    // Draw debris particles (flying shrapnel)
+    for (const p of debris) {
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Explosion flash overlay
+    if (flashIntensity > 0.01) {
+      ctx.fillStyle = `rgba(255, 200, 100, ${Math.min(0.7, flashIntensity * 0.7)})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      flashIntensity *= 0.72; // decay flash quickly
+    }
   }
 
   // ── Loop ───────────────────────────────────────────────────────────────────
   function loop() {
     spawnFromPours();
     step();
+    updateDebris();
     render();
     animId = requestAnimationFrame(loop);
   }
@@ -1161,6 +1342,8 @@
     if (!id) return 2;
     const spec = registry[id];
     if (!spec) return 2;
+    // Explosive materials get a bigger brush so users can paint satisfying amounts
+    if (spec.isExplosive) return 3;
     if (spec.kind === 'static') return 4;
     if (spec.kind === 'gas') {
       // High-buoyancy gases (fire, plasma) spread fast — small brush reads better.
