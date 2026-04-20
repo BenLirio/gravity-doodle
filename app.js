@@ -15,11 +15,21 @@
 //              lighter ones. `viscosity` 0..1 controls how reluctant the
 //              liquid is to move sideways or fall (0 = water, 1 = honey).
 //   gas      — rises and escapes the top. `lifeMin/lifeMax` decay it.
+//   cellular — Conway-style cellular automaton. `born` and `survive` are
+//              arrays of neighbor counts. `birthFrom` is an optional list
+//              of element keys that count as "alive" neighbors for triggering
+//              birth (defaults to self). Makes elements feel like living
+//              organisms or spreading mold.
 //
 // Reactions: per element, list `{ other, becomes, chance }`. When this
 // element is adjacent to `other`, with `chance` per frame `other`'s cell
 // becomes `becomes` (or `null`/`"empty"` to destroy it). Built-in rules
 // use this same system.
+//
+// Special reaction flag `explodes: true` — if present on a reaction, when
+// it fires it triggers a radial explosion instead of the normal cell swap.
+// The `explosionRadius` and `explosionPower` fields control blast size and
+// how much fire/debris spawns. This makes TNT and bomb elements feel real.
 
 (function () {
   // ── Constants ──────────────────────────────────────────────────────────────
@@ -504,6 +514,61 @@
 
   const NBR_DIRS = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
 
+  // ── Explosion system ───────────────────────────────────────────────────────
+  // Queue of pending explosions: { c, r, radius, power }. Applied after
+  // reactions each step so a chain can enqueue new explosions.
+  let pendingExplosions = [];
+
+  function enqueueExplosion(c, r, radius, power) {
+    pendingExplosions.push({ c, r, radius: radius || 8, power: power || 1 });
+  }
+
+  function applyExplosions() {
+    if (!pendingExplosions.length) return;
+    const fireId  = keyToId['fire'];
+    const smokeId = keyToId['smoke'];
+    for (const ex of pendingExplosions) {
+      const { c, r, radius, power } = ex;
+      const r2 = radius * radius;
+      for (let dc = -radius; dc <= radius; dc++) {
+        for (let dr = -radius; dr <= radius; dr++) {
+          const dist2 = dc * dc + dr * dr;
+          if (dist2 > r2) continue;
+          const nc = c + dc, nr = r + dr;
+          if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+          const ni = idx(nc, nr);
+          const existId = grid[ni];
+          if (existId) {
+            const existSpec = registry[existId];
+            // Walls resist explosions; denser walls absorb more
+            if (existSpec && existSpec.kind === 'static') {
+              if (Math.random() > power * 0.35) continue;
+            }
+          }
+          // Core: clear cells; chance to spawn fire; outer ring → smoke
+          const normDist = Math.sqrt(dist2) / radius;
+          grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
+          if (normDist < 0.5 && fireId && Math.random() < power * 0.7) {
+            grid[ni] = fireId;
+            const fSpec = registry[fireId];
+            colors[ni] = colorForSpec(fSpec);
+            if (fSpec.lifeMin) {
+              life[ni] = fSpec.lifeMin + Math.floor(Math.random() * Math.max(1, fSpec.lifeMax - fSpec.lifeMin));
+            }
+          } else if (normDist >= 0.5 && smokeId && Math.random() < 0.5) {
+            grid[ni] = smokeId;
+            const sSpec = registry[smokeId];
+            colors[ni] = colorForSpec(sSpec);
+            if (sSpec.lifeMin) {
+              life[ni] = sSpec.lifeMin + Math.floor(Math.random() * Math.max(1, sSpec.lifeMax - sSpec.lifeMin));
+            }
+          }
+        }
+      }
+    }
+    pendingExplosions = [];
+  }
+
   function applyReactions() {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -526,6 +591,14 @@
             if (grid[ni] !== otherId) continue;
 
             if (Math.random() < (rx.chance || 0)) {
+              // Explosion reaction: queue a blast centered on this cell
+              if (rx.explodes) {
+                enqueueExplosion(c, r, rx.explosionRadius || 8, rx.explosionPower || 1);
+                // The exploding cell itself is consumed
+                grid[i] = EMPTY; colors[i] = null; life[i] = 0;
+                flags[i] |= 2;
+                break;
+              }
               if (rx.becomes === null || rx.becomes === '' || rx.becomes === 'empty') {
                 grid[ni] = EMPTY;
                 colors[ni] = null;
@@ -541,6 +614,55 @@
                   : 0;
               }
               flags[ni] |= 2;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── Cellular automaton step ────────────────────────────────────────────────
+  // Applies Conway-style rules for elements with kind === 'cellular'.
+  // `born`    — array of neighbor-count values that birth a new cell from empty
+  // `survive` — array of neighbor-count values that keep an existing cell alive
+  // `birthFrom` — optional array of element keys that count as neighbors
+  //               (defaults to the element's own key + keys listed)
+  function applyCellular() {
+    // Collect all cellular element ids
+    const cellularIds = Object.keys(registry)
+      .map(n => +n)
+      .filter(id => registry[id] && registry[id].kind === 'cellular');
+    if (!cellularIds.length) return;
+
+    // We process all cellular elements in one snapshot pass to avoid order bias
+    const snapGrid = grid.slice();
+    for (const id of cellularIds) {
+      const spec = registry[id];
+      const born    = spec.born    || [3];
+      const survive = spec.survive || [2, 3];
+      // Keys whose cells count as "alive" neighbors for birth/survival counting
+      const neighborKeys = [spec.key, ...(spec.birthFrom || [])];
+      const neighborIds  = new Set(neighborKeys.map(k => keyToId[k]).filter(Boolean));
+
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const i = idx(c, r);
+          const isAlive = snapGrid[i] === id;
+          let n = 0;
+          for (const [dc, dr] of NBR_DIRS) {
+            const nc = c + dc, nr = r + dr;
+            if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+            if (neighborIds.has(snapGrid[idx(nc, nr)])) n++;
+          }
+          if (isAlive) {
+            if (!survive.includes(n)) {
+              grid[i] = EMPTY; colors[i] = null; life[i] = 0;
+            }
+          } else if (snapGrid[i] === EMPTY) {
+            if (born.includes(n)) {
+              grid[i] = id;
+              colors[i] = colorForSpec(spec);
+              life[i] = 0;
             }
           }
         }
@@ -575,6 +697,8 @@
     }
 
     applyReactions();
+    applyExplosions();
+    applyCellular();
 
     // Gas rise (top to bottom so a rising gas isn't moved twice).
     for (let r = 0; r < ROWS; r++) {
@@ -1082,7 +1206,7 @@
       '',
       'Schema (all fields required unless marked optional):',
       '{',
-      '  "kind": "static" | "powder" | "liquid" | "gas",',
+      '  "kind": "static" | "powder" | "liquid" | "gas" | "cellular",',
       '  "density": number 1-9,',
       '  "viscosity": number 0-1 (LIQUID ONLY),',
       '  "flow": number 0-1 (POWDER ONLY),',
@@ -1090,15 +1214,18 @@
       '  "buoyancy": number 0-1 (GAS ONLY),',
       '  "lifeMin": integer 0-150 (GAS ONLY),',
       '  "lifeMax": integer 0-200 (GAS ONLY, >= lifeMin),',
+      '  "born": array of integers 0-8 (CELLULAR ONLY — neighbor counts that birth a new cell, e.g. [3] for Conway life),',
+      '  "survive": array of integers 0-8 (CELLULAR ONLY — neighbor counts that keep an existing cell alive, e.g. [2,3]),',
       '  "colors": array of 3-6 hex strings like "#aabbcc", vivid, coherent, readable on near-black,',
-      '  "reactions": array of 0-3 objects, each { "other": "<existing-key>", "becomes": "<existing-key-or-empty>", "chance": number 0.005-0.25 }',
+      '  "reactions": array of 0-3 objects, each { "other": "<existing-key>", "becomes": "<existing-key-or-empty>", "chance": number 0.005-0.25, "explodes": bool (optional), "explosionRadius": int 4-16 (optional), "explosionPower": float 0.5-2 (optional) }',
       '}',
       '',
       'KIND — pick by what the name evokes, not just letters:',
       '- static: solid, never moves. wall, brick, stone, metal, wood, ice, plant, glass, bone, web, crystal, bedrock, concrete, iron, steel.',
-      '- powder: granular, falls and piles. sand, salt, sugar, flour, dust, ash, glitter, snow, seed, gunpowder, gravel, pebbles, rice, confetti.',
+      '- powder: granular, falls and piles. sand, salt, sugar, flour, dust, ash, glitter, snow, seed, gunpowder, TNT, gravel, pebbles, rice, confetti.',
       '- liquid: falls and spreads sideways. water, oil, honey, acid, slime, blood, milk, juice, lava, mercury, syrup, tar, wine, soda, gasoline, ink, paint.',
       '- gas: RISES. fire, flame, smoke, steam, vapor, fog, mist, cloud, spore, plasma, lightning-bug swarm. If in doubt about something hot, bright, or airborne, it\'s a gas.',
+      '- cellular: Conway-style automaton that evolves by neighbor counts. Use for mold, fungus, crystal growth, coral, life, infection, mycelium, slime mold, lichen.',
       '',
       'NUMERIC GUIDES (follow unless the description overrides):',
       '- density: feather=1, smoke=2, oil=3, alcohol=4, water=5, blood=6, mercury=8, lead=9.',
@@ -1107,6 +1234,13 @@
       '- stickiness: glue/tar/slime/web/resin = 0.7-0.95. "sticky/clingy/gummy" >= 0.5. default 0.',
       '- buoyancy (gas): hot/fire/plasma = 1.0, steam = 0.8, smoke = 0.6, heavy fog = 0.25.',
       '- lifeMin/lifeMax (gas): short puff 20-40, medium 60-100, long-lived 120-180. Fire usually 40-80; smoke 60-120; steam 30-60.',
+      '- born/survive (cellular): standard Conway life = born:[3], survive:[2,3]. Dense coral = born:[3,4,5], survive:[4,5,6,7]. Fast spreading mold = born:[3,6], survive:[2,3].',
+      '',
+      'EXPLOSION REACTIONS — use the explodes flag for elements that should BLOW UP:',
+      '  If the element name or description implies explosion (TNT, bomb, dynamite, C4, grenade, landmine, etc.), add a reaction with `"explodes": true`.',
+      '  The exploding cell AND a radius of cells around it are cleared; fire and smoke are spawned in the blast zone.',
+      '  Example: tnt reacting to fire → { "other": "fire", "explodes": true, "explosionRadius": 10, "explosionPower": 1.5, "chance": 0.9 }',
+      '  Explosion reactions REPLACE the normal "becomes" — you do not need "becomes" when "explodes" is true.',
       '',
       'REACTIONS — this is what makes the sandbox feel ALIVE. Always think: "what does this element DO to things it touches?"',
       '  "other" must be one of the EXISTING keys: ' + otherList + '. (You may also reference yourself in "becomes".)',
@@ -1123,11 +1257,15 @@
       '    ice → kind:static, density:5, colors:["#c0e0ff","#a0d0f0","#e0f0ff","#80b0e0"]',
       '    oil → kind:liquid, density:3, viscosity:0.3, colors:["#2a1010","#4a2810","#1a0808","#603020"], reactions:[{other:"fire",becomes:"fire",chance:0.2}]',
       '    gunpowder → kind:powder, flow:0.6, density:4, colors:["#2a2a2a","#404040","#1a1a1a"], reactions:[{other:"fire",becomes:"fire",chance:0.5}]',
+      '    tnt → kind:powder, flow:0.45, density:4, colors:["#c02020","#e03030","#ff4040","#802020"], reactions:[{other:"fire",explodes:true,explosionRadius:10,explosionPower:1.5,chance:0.9}]',
+      '    mold → kind:cellular, density:3, born:[3,6], survive:[2,3,6], colors:["#304820","#405830","#50682a","#2a3818"]',
+      '    life → kind:cellular, density:3, born:[3], survive:[2,3], colors:["#40e080","#30c060","#60f090","#20a050"]',
       '',
       'REACTION ANTI-PATTERNS (avoid these):',
       '- Do NOT make a sticky or gooey element convert other elements into itself (e.g. boogers turning water into boogers). That makes the element feel like a virus, not a physical material. Stickiness is handled by the `stickiness` property — reactions should model chemistry, not growth.',
       '- Reactions with `becomes: <self>` (the element converts things into more of itself) should only be used for truly contagious elements (fire spreading to plant, infection, etc.). Keep chance very low (< 0.06) and only against 1 other element max.',
       '- If the element description says "sticky" or "clingy", set `stickiness >= 0.7` instead of adding self-propagating reactions.',
+      '- NEVER use "becomes" when "explodes" is true — the explosion mechanic handles what the cell becomes.',
       '',
       'RULES OF THUMB:',
       '- If the name contains "fire/flame/inferno/ember/plasma/spark/lightning" → kind MUST be gas, buoyancy >= 0.9, and add a reaction that burns plant/oil/wood.',
@@ -1135,6 +1273,8 @@
       '- If the name contains "wall/brick/stone/wood/metal/crystal/glass/ice/plant" → kind MUST be static unless the user says otherwise.',
       '- If the name contains "water/oil/lava/acid/slime/blood/juice/honey/syrup/tar/milk/soda/ink/wine" → kind MUST be liquid.',
       '- If the name contains "sand/salt/sugar/dust/ash/flour/glitter/snow/seed/gravel" → kind MUST be powder.',
+      '- If the name contains "tnt/bomb/dynamite/explosive/c4/grenade/landmine/blastite" → kind MUST be powder, AND MUST have an explodes:true reaction triggered by fire.',
+      '- If the name contains "mold/fungus/moss/coral/mycelium/lichen/slime-mold/life/conway/automaton" → kind MUST be cellular.',
       '- If the element sounds REACTIVE (burns, melts, freezes, dissolves, rusts, poisons, cures, grows, explodes, etches, corrodes), ADD AT LEAST ONE reaction. Elements with no reactions feel inert.',
       '',
       'COLORS: 3-6 hex values from a coherent palette that READS on near-black (#0f0e0c). Honey=warm gold, tar=near-black with brown flecks, acid=vivid neon green, snow=warm whites + pale blues, fire=orange/yellow/red, smoke=grays, lava=deep red/orange/yellow, plant=greens, ice=pale blues/cyans. Avoid pure #000000 or very dark colors for powders/liquids — they disappear.',
@@ -1231,6 +1371,8 @@
     if (hitsWord(name, ['sand', 'salt', 'sugar', 'flour', 'dust', 'talc'])) return 'powder';
     if (hitsWord(name, ['ash', 'soot', 'cinder', 'glitter', 'gravel'])) return 'powder';
     if (hitsWord(name, ['snow', 'seed', 'gunpowder', 'gun-powder', 'confetti'])) return 'powder';
+    if (hitsWord(name, ['tnt', 'bomb', 'dynamite', 'explosive', 'c4', 'grenade', 'blastite', 'landmine'])) return 'powder';
+    if (hitsWord(name, ['mold', 'fungus', 'mycelium', 'lichen', 'coral', 'conway', 'automaton', 'slime-mold'])) return 'cellular';
 
     // Pass 2 — fall back to description ONLY if the name itself didn't
     // give us anything. This catches e.g. user types "whoosh" with desc
@@ -1283,7 +1425,7 @@
 
   // Sanitize and shape whatever the LLM returned into a valid spec.
   function finalizeSpec(displayName, key, raw, userDesc) {
-    const kinds = ['static', 'powder', 'liquid', 'gas'];
+    const kinds = ['static', 'powder', 'liquid', 'gas', 'cellular'];
     let kind = (raw && typeof raw.kind === 'string') ? raw.kind.toLowerCase() : 'powder';
     if (kinds.indexOf(kind) < 0) kind = 'powder';
     // Hard override for names with unambiguous real-world kinds.
@@ -1317,6 +1459,18 @@
         if (!rx || typeof rx !== 'object') continue;
         const other = (typeof rx.other === 'string') ? rx.other.toLowerCase() : '';
         if (!validKeys.has(other)) continue;
+
+        // Explosion reaction: { other, explodes: true, explosionRadius, explosionPower, chance }
+        if (rx.explodes) {
+          let chance = Number(rx.chance);
+          if (!isFinite(chance)) chance = 0.9;
+          chance = Math.max(0.1, Math.min(1, chance));
+          const explosionRadius = Math.max(4, Math.min(20, Math.round(Number(rx.explosionRadius)) || 8));
+          const explosionPower  = Math.max(0.3, Math.min(3, Number(rx.explosionPower) || 1));
+          reactions.push({ other, explodes: true, explosionRadius, explosionPower, chance });
+          continue;
+        }
+
         let becomes = rx.becomes;
         if (becomes == null || becomes === '' || /^empty$/i.test(String(becomes))) {
           becomes = null;
@@ -1391,6 +1545,14 @@
       lifeMax = Math.max(0, Math.min(200, lifeMax));
       if (lifeMin === 0 && lifeMax === 0) { lifeMin = 60; lifeMax = 100; }
       out.lifeMin = lifeMin; out.lifeMax = lifeMax;
+    } else if (kind === 'cellular') {
+      // born: neighbor counts that create a new cell from empty
+      // survive: neighbor counts that keep an existing cell alive
+      const parseIntArray = (v) => Array.isArray(v)
+        ? v.map(Number).filter(n => isFinite(n) && n >= 0 && n <= 8).map(Math.round)
+        : null;
+      out.born    = parseIntArray(raw && raw.born)    || [3];
+      out.survive = parseIntArray(raw && raw.survive) || [2, 3];
     }
 
     // Name-based reaction backstops: if the model produced no reactions for
@@ -1404,6 +1566,11 @@
       if (becomes != null && !keyToId[becomes] && becomes !== key) return;
       if (hasReact(other)) return;
       out.reactions.push({ other, becomes, chance });
+    };
+    const tryAddExplode = (other, radius, power, chance) => {
+      if (!keyToId[other]) return;
+      if (hasReact(other)) return;
+      out.reactions.push({ other, explodes: true, explosionRadius: radius, explosionPower: power, chance });
     };
     if (kind === 'gas' && any('fire', 'flame', 'inferno', 'ember', 'plasma')) {
       tryAdd('plant', 'fire', 0.12);
@@ -1422,6 +1589,16 @@
     }
     if (kind === 'powder' && any('snow', 'ice')) {
       tryAdd('fire', null, 0.2);
+    }
+    // Explosive backstop: if an element with a clearly explosive name has no
+    // fire reaction, add a guaranteed explosion reaction so users get the
+    // expected "touch fire → BOOM" behaviour.
+    if (kind === 'powder' && any('tnt', 'bomb', 'dynamite', 'explosive', 'blastite', 'c4', 'grenade')) {
+      tryAddExplode('fire', 10, 1.5, 0.9);
+    }
+    if (kind === 'powder' && any('gunpowder', 'gun-powder')) {
+      // Gunpowder chain-reacts but doesn't full-explode — leave as normal reaction.
+      tryAdd('fire', 'fire', 0.5);
     }
 
     return out;
@@ -1475,6 +1652,8 @@
     let lifeMin = 60, lifeMax = 110;
     let colorsOverride = null;
     let reactions = [];
+    let born = [3];
+    let survive = [2, 3];
 
     if (has('fire', 'flame', 'inferno', 'ember', 'plasma', 'spark', 'lightning')) {
       kind = 'gas'; density = 1; buoyancy = 1; lifeMin = 30; lifeMax = 70;
@@ -1555,6 +1734,19 @@
       kind = 'powder'; flow = 0.6; density = 4;
       colorsOverride = ['#2a2a2a', '#404040', '#1a1a1a'];
       reactions = reactList(react('fire', 'fire', 0.5));
+    } else if (has('tnt', 'bomb', 'dynamite', 'explosive', 'c4', 'grenade', 'blastite', 'landmine')) {
+      kind = 'powder'; flow = 0.45; density = 4;
+      colorsOverride = ['#c02020', '#e03030', '#ff4040', '#802020'];
+      // Explosion reaction — blows up on contact with fire
+      if (keyExists('fire')) {
+        reactions = [{ other: 'fire', explodes: true, explosionRadius: 10, explosionPower: 1.5, chance: 0.9 }];
+      }
+    } else if (has('mold', 'fungus', 'mycelium', 'lichen', 'coral', 'slime-mold')) {
+      kind = 'cellular'; density = 3; born = [3, 6]; survive = [2, 3, 6];
+      colorsOverride = ['#304820', '#405830', '#50682a', '#2a3818'];
+    } else if (has('conway', 'automaton', 'life')) {
+      kind = 'cellular'; density = 3; born = [3]; survive = [2, 3];
+      colorsOverride = ['#40e080', '#30c060', '#60f090', '#20a050'];
     } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar', 'rice', 'confetti', 'gun-powder')) {
       kind = 'powder'; flow = 0.55;
     }
@@ -1570,9 +1762,10 @@
       isBuiltIn: false,
       userDesc: desc || '',
     };
-    if (kind === 'liquid') { out.viscosity = viscosity; out.stickiness = stickiness; }
-    if (kind === 'powder') { out.flow = flow; out.stickiness = stickiness; }
-    if (kind === 'gas')    { out.buoyancy = buoyancy; out.lifeMin = lifeMin; out.lifeMax = lifeMax; }
+    if (kind === 'liquid')   { out.viscosity = viscosity; out.stickiness = stickiness; }
+    if (kind === 'powder')   { out.flow = flow; out.stickiness = stickiness; }
+    if (kind === 'gas')      { out.buoyancy = buoyancy; out.lifeMin = lifeMin; out.lifeMax = lifeMax; }
+    if (kind === 'cellular') { out.born = born; out.survive = survive; }
     return out;
   }
 })();
