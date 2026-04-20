@@ -422,7 +422,7 @@
     // doesn't move.)
     holdPaintTimer = setInterval(() => {
       if (!isPointerDown || !lastPointer) return;
-      paintAt(lastPointer.c, lastPointer.r, 2);
+      paintAt(lastPointer.c, lastPointer.r, brushRadiusFor(selectedKey));
     }, 33);
   }
 
@@ -437,7 +437,7 @@
     const cell = canvasCell(e);
     lastCell = cell;
     lastPointer = cell;
-    paintAt(cell.c, cell.r, 2);
+    paintAt(cell.c, cell.r, brushRadiusFor(selectedKey));
     hideOverlay();
     startHoldPaint();
   }
@@ -446,7 +446,7 @@
     if (!isPointerDown) return;
     e.preventDefault();
     const cell = canvasCell(e);
-    if (lastCell) paintLine(lastCell.c, lastCell.r, cell.c, cell.r, 2);
+    if (lastCell) paintLine(lastCell.c, lastCell.r, cell.c, cell.r, brushRadiusFor(selectedKey));
     lastCell = cell;
     lastPointer = cell;
   }
@@ -629,9 +629,22 @@
   }
 
   function stepPowder(c, r, i, spec) {
-    // Stickiness: a sticky powder occasionally refuses to move (e.g. wet sand).
+    // Stickiness: a sticky powder clings to walls and neighboring solids.
+    // High stickiness (wet sand, clay) makes the particle freeze when touching walls.
     const stick = (typeof spec.stickiness === 'number') ? spec.stickiness : 0;
-    if (stick > 0 && Math.random() < stick * 0.7) return;
+    if (stick > 0) {
+      let wallNearby = false;
+      for (const [dc, dr] of NBR_DIRS) {
+        const nc = c + dc, nr = r + dr;
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) { wallNearby = true; break; }
+        const nid = grid[idx(nc, nr)];
+        if (!nid) continue;
+        const nSpec = registry[nid];
+        if (nSpec && nSpec.kind === 'static') { wallNearby = true; break; }
+      }
+      const freezeChance = wallNearby ? stick * 0.8 : stick * 0.5;
+      if (Math.random() < freezeChance) return;
+    }
 
     if (r + 1 < ROWS) {
       const below = idx(c, r + 1);
@@ -675,19 +688,30 @@
     const stick = (typeof spec.stickiness === 'number') ? spec.stickiness : 0;
 
     // Stickiness: chance to anchor (honey/syrup clinging to walls/each other).
+    // Elements with high stickiness should "freeze" when touching a wall —
+    // gravity effectively stops while they're connected to a solid surface.
+    // Walls (static kind) give a stronger anchoring signal than powders.
     if (stick > 0) {
-      // Check if there's a static or higher-density solid neighbour to cling to.
-      let supported = false;
+      let wallTouching = false;   // adjacent to a static (wall/structure)
+      let solidTouching = false;  // adjacent to a powder
       for (const [dc, dr] of NBR_DIRS) {
         const nc = c + dc, nr = r + dr;
-        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
+        if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) {
+          // Edge of the canvas counts as a wall for stickiness purposes.
+          wallTouching = true;
+          break;
+        }
         const nid = grid[idx(nc, nr)];
         if (!nid || nid === grid[i]) continue;
         const nSpec = registry[nid];
         if (!nSpec) continue;
-        if (nSpec.kind === 'static' || nSpec.kind === 'powder') { supported = true; break; }
+        if (nSpec.kind === 'static') { wallTouching = true; break; }
+        if (nSpec.kind === 'powder') solidTouching = true;
       }
-      if (supported && Math.random() < stick) return;
+      // Wall contact → high freeze chance (gravity stop effect the user expects).
+      if (wallTouching && Math.random() < stick) return;
+      // Powder contact → moderate freeze (clumping/cohesion).
+      if (solidTouching && Math.random() < stick * 0.6) return;
     }
 
     // Viscosity: a viscous liquid sometimes refuses to move at all this frame.
@@ -1000,6 +1024,45 @@
     return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20);
   }
 
+  // ── Brush radius per element ──────────────────────────────────────────────
+  // Different elements benefit from different brush sizes. Static elements
+  // (walls, structures) get a large brush so you can build quickly. Gases
+  // get a medium-large brush since they're diffuse. Liquids and powders use
+  // a size that scales with their expected "pour" or "dump" feel.
+  // For invented elements, stickiness hints at precision (sticky = smaller
+  // brush so placement is deliberate), and gas buoyancy hints at spread.
+  function brushRadiusFor(key) {
+    if (key === 'erase') return 3;
+    const id = keyToId[key];
+    if (!id) return 2;
+    const spec = registry[id];
+    if (!spec) return 2;
+    if (spec.kind === 'static') return 4;
+    if (spec.kind === 'gas') {
+      // High-buoyancy gases (fire, plasma) spread fast — small brush reads better.
+      const buoy = (typeof spec.buoyancy === 'number') ? spec.buoyancy : 0.9;
+      return buoy >= 0.9 ? 2 : 3;
+    }
+    if (spec.kind === 'liquid') {
+      // Highly sticky liquids: smaller brush for precise placement.
+      const stick = (typeof spec.stickiness === 'number') ? spec.stickiness : 0;
+      if (stick >= 0.7) return 1;
+      // Very viscous liquids also get a small brush — you're placing globs, not pouring.
+      const visc = (typeof spec.viscosity === 'number') ? spec.viscosity : 0;
+      if (visc >= 0.8) return 2;
+      return 2;
+    }
+    if (spec.kind === 'powder') {
+      const flow = (typeof spec.flow === 'number') ? spec.flow : 0.55;
+      // Fine powders (flour, dust, glitter) — bigger brush feels right.
+      if (flow >= 0.9) return 3;
+      // Coarse/chunky powders (gravel) — smaller, deliberate.
+      if (flow <= 0.2) return 2;
+      return 2;
+    }
+    return 2;
+  }
+
   // ── AI call ────────────────────────────────────────────────────────────────
   // We use the flagship gpt-5.4 model (not mini) because designing a
   // coherent physics spec — picking density, viscosity, stickiness, flow,
@@ -1060,6 +1123,11 @@
       '    ice → kind:static, density:5, colors:["#c0e0ff","#a0d0f0","#e0f0ff","#80b0e0"]',
       '    oil → kind:liquid, density:3, viscosity:0.3, colors:["#2a1010","#4a2810","#1a0808","#603020"], reactions:[{other:"fire",becomes:"fire",chance:0.2}]',
       '    gunpowder → kind:powder, flow:0.6, density:4, colors:["#2a2a2a","#404040","#1a1a1a"], reactions:[{other:"fire",becomes:"fire",chance:0.5}]',
+      '',
+      'REACTION ANTI-PATTERNS (avoid these):',
+      '- Do NOT make a sticky or gooey element convert other elements into itself (e.g. boogers turning water into boogers). That makes the element feel like a virus, not a physical material. Stickiness is handled by the `stickiness` property — reactions should model chemistry, not growth.',
+      '- Reactions with `becomes: <self>` (the element converts things into more of itself) should only be used for truly contagious elements (fire spreading to plant, infection, etc.). Keep chance very low (< 0.06) and only against 1 other element max.',
+      '- If the element description says "sticky" or "clingy", set `stickiness >= 0.7` instead of adding self-propagating reactions.',
       '',
       'RULES OF THUMB:',
       '- If the name contains "fire/flame/inferno/ember/plasma/spark/lightning" → kind MUST be gas, buoyancy >= 0.9, and add a reaction that burns plant/oil/wood.',
@@ -1162,7 +1230,7 @@
 
     if (hitsWord(name, ['sand', 'salt', 'sugar', 'flour', 'dust', 'talc'])) return 'powder';
     if (hitsWord(name, ['ash', 'soot', 'cinder', 'glitter', 'gravel'])) return 'powder';
-    if (hitsWord(name, ['snow', 'seed', 'gunpowder', 'confetti'])) return 'powder';
+    if (hitsWord(name, ['snow', 'seed', 'gunpowder', 'gun-powder', 'confetti'])) return 'powder';
 
     // Pass 2 — fall back to description ONLY if the name itself didn't
     // give us anything. This catches e.g. user types "whoosh" with desc
@@ -1204,7 +1272,7 @@
     if (has('flour', 'dust', 'talc', 'powder')) return { density: 2, flow: 1.0, stickiness: 0 };
     if (has('ash', 'soot', 'cinder'))  return { density: 2, flow: 0.9, stickiness: 0 };
     if (has('gravel', 'pebbles', 'rocks')) return { density: 7, flow: 0.15, stickiness: 0 };
-    if (has('gunpowder'))              return { density: 4, flow: 0.6, stickiness: 0 };
+    if (has('gunpowder') || has('gun-powder')) return { density: 4, flow: 0.6, stickiness: 0 };
     if (has('salt', 'sugar', 'seed', 'rice', 'glitter', 'confetti', 'sand')) return { density: 4, flow: 0.55, stickiness: 0 };
     if (has('wood', 'timber', 'log', 'bark')) return { density: 4 };
     if (has('metal', 'iron', 'steel', 'copper', 'brass', 'gold', 'silver')) return { density: 8 };
@@ -1244,6 +1312,7 @@
     validKeys.add(key);
     const reactions = [];
     if (Array.isArray(raw && raw.reactions)) {
+      let selfPropagateCount = 0;
       for (const rx of raw.reactions.slice(0, 3)) {
         if (!rx || typeof rx !== 'object') continue;
         const other = (typeof rx.other === 'string') ? rx.other.toLowerCase() : '';
@@ -1258,6 +1327,15 @@
         let chance = Number(rx.chance);
         if (!isFinite(chance)) chance = 0.05;
         chance = Math.max(0.005, Math.min(0.25, chance));
+        // Guard against "viral spread" anti-pattern: an element that converts
+        // other materials into more of itself reads as a bug, not physics.
+        // Cap self-propagating reactions to one max, with a low chance.
+        // (Exception: fire spreading to plant/oil is expected and intentional.)
+        if (becomes === key) {
+          selfPropagateCount++;
+          if (selfPropagateCount > 1) continue; // only allow one self-reaction
+          chance = Math.min(chance, 0.05);       // cap viral spread chance
+        }
         reactions.push({ other, becomes, chance });
       }
     }
@@ -1473,11 +1551,11 @@
       colorsOverride = ['#505050', '#707070', '#3a3a3a'];
     } else if (has('gravel', 'rocks', 'pebbles')) {
       kind = 'powder'; flow = 0.15; density = 7;
-    } else if (has('gunpowder')) {
+    } else if (has('gunpowder', 'gun-powder')) {
       kind = 'powder'; flow = 0.6; density = 4;
       colorsOverride = ['#2a2a2a', '#404040', '#1a1a1a'];
       reactions = reactList(react('fire', 'fire', 0.5));
-    } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar', 'rice', 'confetti')) {
+    } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar', 'rice', 'confetti', 'gun-powder')) {
       kind = 'powder'; flow = 0.55;
     }
 
