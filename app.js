@@ -157,10 +157,11 @@
   // Active pours: top-of-screen curtains. { id, frames, total, kind }
   let pours = [];
 
-  // Debris particles: flying shrapnel after explosions.
-  // Each: { x, y, vx, vy, life, maxLife, color }
-  // These are rendered as sub-cell dots flying in arc trajectories.
-  let debris = [];
+  // Physics projectiles: grid cells ejected by explosions.
+  // Each cell flies as a real physics body, then lands back on the grid.
+  // { x, y, vx, vy, id, color }  — x/y in pixel coords, id is element id.
+  // When a projectile lands on an empty grid cell it deposits as that element.
+  let projectiles = [];
 
   // Screen flash effect after explosion: { intensity 0-1 }
   let flashIntensity = 0;
@@ -389,7 +390,7 @@
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.clearAll = function () {
     pours = [];
-    debris = [];
+    projectiles = [];
     flashIntensity = 0;
     pendingExplosions = [];
     initGrid();
@@ -570,29 +571,21 @@
     pendingExplosions.push({ c, r, radius: radius || 8, power: power || 1 });
   }
 
-  // Debris colors for shrapnel particles
-  const DEBRIS_COLORS = ['#ff8020', '#ffb040', '#ff4010', '#ffd060', '#ff6030', '#ffe080', '#ff2000', '#ffffff'];
-
-  function spawnDebris(cx, cy, radius, power) {
-    // Spawn debris particles flying outward in all directions.
-    // Number of debris pieces scales with explosion power and radius.
-    const count = Math.floor(radius * power * 6 + 20);
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = (1.5 + Math.random() * 4.5) * power;
-      const vx = Math.cos(angle) * speed;
-      const vy = Math.sin(angle) * speed;
-      const maxLife = 18 + Math.floor(Math.random() * 30);
-      debris.push({
-        x: cx * CELL + CELL / 2 + (Math.random() - 0.5) * radius * CELL * 0.4,
-        y: cy * CELL + CELL / 2 + (Math.random() - 0.5) * radius * CELL * 0.4,
-        vx, vy,
-        life: maxLife,
-        maxLife,
-        color: DEBRIS_COLORS[Math.floor(Math.random() * DEBRIS_COLORS.length)],
-        size: 1 + Math.random() * 3,
-      });
-    }
+  // Eject a real grid cell as a physics projectile outward from the explosion center.
+  // The cell is removed from the grid and tracked as a flying body; when it lands
+  // on an empty cell it deposits back as that element — creating physical displacement.
+  function ejectCell(cx, cy, cellC, cellR, cellId, cellColor, power) {
+    // Direction from explosion center to this cell
+    const dc = cellC - cx;
+    const dr = cellR - cy;
+    const dist = Math.sqrt(dc * dc + dr * dr) || 1;
+    // Speed falls off with distance; closer cells fly faster
+    const speed = (3.5 + Math.random() * 3.5) * power * (1 - dist / 30);
+    const px = cellC * CELL + CELL / 2;
+    const py = cellR * CELL + CELL / 2;
+    const vx = (dc / dist) * speed + (Math.random() - 0.5) * speed * 0.4;
+    const vy = (dr / dist) * speed - Math.random() * speed * 0.6; // bias upward
+    projectiles.push({ x: px, y: py, vx, vy, id: cellId, color: cellColor });
   }
 
   function applyExplosions() {
@@ -607,11 +600,8 @@
     for (const ex of thisRound) {
       const { c, r, radius, power } = ex;
 
-      // Screen flash — intensity proportional to power
-      flashIntensity = Math.min(1, flashIntensity + power * 0.5);
-
-      // Spawn flying debris
-      spawnDebris(c, r, radius, power);
+      // Screen flash — intensity proportional to power (kept subtle)
+      flashIntensity = Math.min(1, flashIntensity + power * 0.35);
 
       const r2 = radius * radius;
       for (let dc = -radius; dc <= radius; dc++) {
@@ -641,20 +631,34 @@
             }
           }
 
-          // Eject material outward as debris color before clearing
           const normDist = Math.sqrt(dist2) / radius;
+
+          // Non-empty, non-explosive cells: eject as physics projectiles so they
+          // physically fly outward and land elsewhere on the grid.
+          // Walls are destroyed in place (too heavy to eject); everything else
+          // gets launched.
+          if (existId) {
+            const existSpec = registry[existId];
+            const isWall = existSpec && existSpec.kind === 'static';
+            if (!isWall && Math.random() < 0.7) {
+              // Eject as a real physics projectile — cell will land back on grid
+              ejectCell(c, r, nc, nr, existId, colors[ni], power);
+            }
+          }
+
+          // Clear the cell — it was either ejected or destroyed
           grid[ni] = EMPTY; colors[ni] = null; life[ni] = 0;
 
-          // Inner core: fire spawns
-          if (normDist < 0.45 && fireId && Math.random() < power * 0.75) {
+          // Inner core: fire fills the cleared space (game-logic: fire propagates)
+          if (normDist < 0.45 && fireId && Math.random() < power * 0.6) {
             grid[ni] = fireId;
             const fSpec = registry[fireId];
             colors[ni] = colorForSpec(fSpec);
             if (fSpec.lifeMin) {
               life[ni] = fSpec.lifeMin + Math.floor(Math.random() * Math.max(1, fSpec.lifeMax - fSpec.lifeMin));
             }
-          // Outer ring: smoke + a chance of fire licks
-          } else if (normDist >= 0.45 && smokeId && Math.random() < 0.55) {
+          // Outer ring: smoke propagates as a real element (reacts with things)
+          } else if (normDist >= 0.45 && smokeId && Math.random() < 0.45) {
             grid[ni] = smokeId;
             const sSpec = registry[smokeId];
             colors[ni] = colorForSpec(sSpec);
@@ -1064,20 +1068,46 @@
     return _colArr;
   }
 
-  // ── Debris particle update ──────────────────────────────────────────────────
-  function updateDebris() {
+  // ── Physics projectile update ───────────────────────────────────────────────
+  // Ejected cells fly as rigid bodies with gravity and air drag.
+  // When a projectile hits an empty grid cell it deposits as that element —
+  // physically displacing material across the sandbox.
+  function updateProjectiles() {
     const alive = [];
-    for (const p of debris) {
+    for (const p of projectiles) {
       p.x  += p.vx;
       p.y  += p.vy;
-      p.vy += 0.18;  // gravity pulls debris down
-      p.vx *= 0.97;  // air drag
-      p.life--;
-      if (p.life > 0 && p.x >= 0 && p.x < canvas.width && p.y >= 0 && p.y < canvas.height) {
-        alive.push(p);
+      p.vy += 0.22;  // gravity
+      p.vx *= 0.96;  // air drag
+      p.vy *= 0.98;
+
+      // Out of bounds — discard
+      if (p.x < 0 || p.x >= canvas.width || p.y < 0 || p.y >= canvas.height) continue;
+
+      // Check if projectile has landed on a grid cell
+      const gc = Math.floor(p.x / CELL);
+      const gr = Math.floor(p.y / CELL);
+      if (gc < 0 || gc >= COLS || gr < 0 || gr >= ROWS) continue;
+      const gi = idx(gc, gr);
+
+      // Deposit the cell if the slot is empty and velocity is low enough to "land"
+      const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      if (grid[gi] === EMPTY && speed < 3.5) {
+        const spec = registry[p.id];
+        if (spec) {
+          grid[gi] = p.id;
+          colors[gi] = p.color;
+          life[gi] = (spec.kind === 'gas' && spec.lifeMin)
+            ? spec.lifeMin + Math.floor(Math.random() * Math.max(1, spec.lifeMax - spec.lifeMin))
+            : 0;
+        }
+        // Cell deposited — projectile consumed
+        continue;
       }
+
+      alive.push(p);
     }
-    debris = alive;
+    projectiles = alive;
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1096,14 +1126,11 @@
       }
     }
 
-    // Draw debris particles (flying shrapnel)
-    for (const p of debris) {
-      const alpha = p.life / p.maxLife;
-      ctx.globalAlpha = alpha;
+    // Draw physics projectiles (ejected grid cells in flight)
+    for (const p of projectiles) {
       ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+      ctx.fillRect(p.x - CELL / 2, p.y - CELL / 2, CELL, CELL);
     }
-    ctx.globalAlpha = 1;
 
     // Explosion flash overlay
     if (flashIntensity > 0.01) {
@@ -1117,7 +1144,7 @@
   function loop() {
     spawnFromPours();
     step();
-    updateDebris();
+    updateProjectiles();
     render();
     animId = requestAnimationFrame(loop);
   }
