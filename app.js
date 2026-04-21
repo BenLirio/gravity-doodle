@@ -121,8 +121,8 @@
       colors: ['#e02020', '#ff3030', '#c01010', '#ff5040', '#ff1010'],
       isBuiltIn: true,
       isExplosive: true,
-      explosionRadius: 12,
-      explosionPower: 1.8,
+      explosionRadius: 7,
+      explosionPower: 1.2,
       reactions: [],
     });
     // NITRO: liquid explosive. Flows like water, detonates on contact with
@@ -133,8 +133,8 @@
       colors: ['#ff8010', '#e86000', '#ffa030', '#ff6000', '#ffb840'],
       isBuiltIn: true,
       isExplosive: true,
-      explosionRadius: 9,
-      explosionPower: 1.4,
+      explosionRadius: 5,
+      explosionPower: 1.0,
       reactions: [],
     });
   }
