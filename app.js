@@ -1679,7 +1679,13 @@
     density = Math.max(1, Math.min(9, density));
 
     let colorsArr = Array.isArray(raw && raw.colors) ? raw.colors.filter(isHex).slice(0, 6) : [];
-    if (colorsArr.length < 3) colorsArr = fillFallbackColors(key);
+    // If the kind was overridden, the LLM's colors were picked for the wrong
+    // mental model of the element (e.g. honey classified as "fire" with red
+    // colors). Swap in a canonical palette for the name when we have one, so
+    // the visual matches what the user expects.
+    const canonicalColors = kindWasOverridden ? canonicalPaletteFromName(key) : null;
+    if (canonicalColors) colorsArr = canonicalColors;
+    if (colorsArr.length < 3) colorsArr = canonicalPaletteFromName(key) || fillFallbackColors(key);
 
     // Reactions — `becomes` may reference this new element by its own key.
     const validKeys = new Set(Object.keys(keyToId));
@@ -1851,6 +1857,60 @@
     return out;
   }
 
+  // Canonical hex palette for well-known element names. Used both as the
+  // color override when `kindOverrideFromName` rewrote the kind (so the LLM's
+  // miscategorised colors don't leak through) and as a final fallback when
+  // the LLM didn't return enough valid hex colors. Palettes mirror the
+  // per-name branches in `fallbackSpec` so the two stay visually in sync.
+  // Returns null when the name is too generic to palette.
+  function canonicalPaletteFromName(key) {
+    const n = (key || '').toLowerCase();
+    const has = (...words) => words.some(w => n.indexOf(w) >= 0);
+    if (has('fire', 'flame', 'inferno', 'ember', 'plasma', 'spark', 'lightning'))
+      return ['#ff4020', '#ff8010', '#ffc040', '#ffe070', '#d02010'];
+    if (has('lava', 'magma'))
+      return ['#ff5020', '#ff8030', '#d03010', '#ffc040'];
+    if (has('steam'))
+      return ['#d8e8f0', '#b0c8d8', '#f0f6fa'];
+    if (has('smoke'))
+      return ['#606060', '#808080', '#4a4a4a', '#a0a0a0'];
+    if (has('fog', 'mist', 'vapor', 'cloud', 'haze'))
+      return ['#a0b8c8', '#c0d0dc', '#7890a0'];
+    if (has('honey', 'syrup', 'molasses', 'caramel'))
+      return ['#e8a030', '#d48020', '#ffc050', '#b86020'];
+    if (has('tar', 'pitch', 'glue', 'resin'))
+      return ['#1a1008', '#2a1810', '#3a2418'];
+    if (has('acid'))
+      return ['#60ff30', '#80ff40', '#30d020', '#b0ff60'];
+    if (has('oil', 'gasoline', 'petrol', 'fuel'))
+      return ['#2a1010', '#4a2810', '#1a0808', '#603020'];
+    if (has('slime', 'goo', 'ooze'))
+      return ['#60c060', '#40a040', '#80d080'];
+    if (has('blood'))
+      return ['#a02020', '#801010', '#c03030', '#600808'];
+    if (has('snow'))
+      return ['#ffffff', '#e8f0ff', '#d0e0f0', '#fafcff'];
+    if (has('ash', 'soot', 'cinder'))
+      return ['#505050', '#707070', '#3a3a3a'];
+    if (has('gunpowder') || has('gun-powder'))
+      return ['#2a2a2a', '#404040', '#1a1a1a'];
+    if (has('tnt', 'bomb', 'dynamite', 'explosive', 'c4', 'grenade', 'blastite', 'landmine'))
+      return ['#c02020', '#e03030', '#ff4040', '#802020'];
+    if (has('ice', 'icicle'))
+      return ['#c0e0ff', '#a0d0f0', '#e0f0ff', '#80b0e0'];
+    if (has('plant', 'leaf', 'vine', 'tree', 'grass', 'moss'))
+      return ['#409040', '#60a050', '#308030', '#80b060'];
+    if (has('wood', 'timber', 'log', 'bark', 'twig'))
+      return ['#7a4820', '#8a5828', '#5a3010', '#a06838'];
+    if (has('metal', 'iron', 'steel', 'copper', 'brass', 'gold', 'silver'))
+      return ['#9a9a9a', '#b0b0b0', '#707070', '#c8c8c8'];
+    if (has('mold', 'fungus', 'mycelium', 'lichen', 'coral', 'slime-mold'))
+      return ['#304820', '#405830', '#50682a', '#2a3818'];
+    if (has('conway', 'automaton', 'life'))
+      return ['#40e080', '#30c060', '#60f090', '#20a050'];
+    return null;
+  }
+
   function hslToHex(h, s, l) {
     s /= 100; l /= 100;
     const k = n => (n + h / 30) % 12;
@@ -1866,8 +1926,19 @@
   // registry is checked so reactions only reference elements that actually
   // exist in this session.
   function fallbackSpec(displayName, key, desc) {
-    const blob = (key + ' ' + (desc || '')).toLowerCase();
-    const has = (...words) => words.some(w => blob.indexOf(w) >= 0);
+    // IMPORTANT: match against the KEY (element name) first, not the full
+    // key+description blob. Descriptions often describe *interactions* with
+    // other elements (e.g. honey "traps fire and dissolves in water", acid
+    // "eats through walls"). If we blob-match those reaction words, we pick
+    // the wrong kind and the wrong canonical palette (honey-with-fire-in-desc
+    // was shipping as kind:gas with red fire colors — three separate user
+    // reports). Use `has` (key-only, strong signal) for the main branch chain
+    // and `hasBlob` (weak fallback) only for elements whose NAME itself gave
+    // no strong signal.
+    const nameOnly = (key || '').toLowerCase();
+    const blob = (nameOnly + ' ' + (desc || '')).toLowerCase();
+    const has = (...words) => words.some(w => nameOnly.indexOf(w) >= 0);
+    const hasBlob = (...words) => words.some(w => blob.indexOf(w) >= 0);
     const keyExists = (k) => keyToId[k] != null;
     const react = (other, becomes, chance) =>
       keyExists(other) && (becomes == null || keyExists(becomes))
@@ -1981,6 +2052,15 @@
       colorsOverride = ['#40e080', '#30c060', '#60f090', '#20a050'];
     } else if (has('sand', 'salt', 'glitter', 'seed', 'sugar', 'rice', 'confetti', 'gun-powder')) {
       kind = 'powder'; flow = 0.55;
+    } else if (hasBlob('fire', 'flame', 'inferno', 'ember', 'plasma')) {
+      // Weak blob-based fallback: the name gave no signal but the description
+      // clearly describes fire-like behavior (e.g. name="whoosh" desc="a burst
+      // of flame"). Safe only because no strong name branch matched above.
+      kind = 'gas'; density = 1; buoyancy = 1; lifeMin = 30; lifeMax = 70;
+      colorsOverride = ['#ff4020', '#ff8010', '#ffc040', '#ffe070', '#d02010'];
+    } else if (hasBlob('smoke', 'steam', 'fog', 'mist', 'vapor', 'cloud', 'haze')) {
+      kind = 'gas'; density = 2; buoyancy = 0.6; lifeMin = 60; lifeMax = 120;
+      colorsOverride = ['#a0b8c8', '#c0d0dc', '#7890a0'];
     }
 
     const out = {
